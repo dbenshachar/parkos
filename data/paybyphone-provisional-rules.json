@@ -1,0 +1,22 @@
+[
+  {
+    "id": "core-light-blue",
+    "type": "Downtown Core",
+    "meterZone": "$2.75/hr",
+    "payByPhoneZone": "80511",
+    "description": "Provisional rule: light blue (Downtown Core $2.75/hr) => 80511"
+  },
+  {
+    "id": "core-lot-dark-blue",
+    "type": "Lot",
+    "meterZone": "$2.75/hr",
+    "payByPhoneZone": "80512",
+    "description": "Provisional rule: dark blue lot ($2.75/hr) => 80512"
+  },
+  {
+    "id": "perimeter-yellow",
+    "meterZone": "$2.25/hr",
+    "payByPhoneZone": "80513",
+    "description": "Provisional rule: yellow perimeter/lot ($2.25/hr) => 80513"
+  }
+]

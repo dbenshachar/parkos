@@ -18,7 +18,100 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Download SLO parking data (ArcGIS)
+
+This repo includes a helper script to download the ArcGIS layer as GeoJSON:
+
+```bash
+npm run download:parking
+```
+
+It writes to `data/slo-street-parking.json`.
+
+If you want a different app/layer/output:
+
+```bash
+node scripts/download-arcgis-layer.mjs \
+  --appid <arcgis-app-id> \
+  --hint parking \
+  --output data/parking.json
+```
+
+## Provisional downtown PayByPhone mapping
+
+Downtown paid parking polygons are stored in:
+
+- `data/slo-downtown-parking-rates.json`
+- Source layer:
+  `https://services.arcgis.com/yygmGNIVQrHqSELP/arcgis/rest/services/SLODowntownPrakingRates/FeatureServer/2`
+
+Current provisional mapping rules are in:
+
+- `data/paybyphone-provisional-rules.json`
+
+Current assumptions:
+
+- light blue (`Downtown Core`, `$2.75/hr`) => `80511`
+- dark blue (`Lot`, `$2.75/hr`) => `80512`
+- yellow (`$2.25/hr`) => `80513`
+
+## Google destination recommendations
+
+Set your Google Places API key in `.env`:
+
+```bash
+GOOGLE_MAPS_API_KEY=your_google_maps_api_key
+```
+
+Google APIs required for this feature:
+
+- Places API (New) for destination lookup
+- Maps JavaScript API for embedded interactive map rendering
+
+The same `GOOGLE_MAPS_API_KEY` is reused for embedded map rendering and fetched through a server
+endpoint (`/api/google-maps/client-key`), so you do not need a separate public env var.
+
+The app now exposes:
+
+- `POST /api/parking/recommend`
+
+Note: this endpoint requires running Next.js with a server (`npm run dev` / `npm run start`).
+
+Request JSON:
+
+```json
+{
+  "destination": "Firestone Grill San Luis Obispo",
+  "limit": 2
+}
+```
+
+Response includes:
+
+- `destination`
+- `street`
+- `destinationLat`
+- `destinationLng`
+- `recommendations` with:
+  `zoneNumber`, `price`, `street`, `intendedDestination`, `distanceMeters`
+
+UI output format:
+
+```text
+Zone <zone number> | <price> | <street> | <intended destination>
+```
+
+Distance behavior:
+
+- Destination is accepted if it is within `1000m` of a paid downtown parking zone.
+- Output includes each recommended zone's distance from the destination in meters.
+- Destination output now includes:
+  - paid downtown recommendations (PayByPhone zones)
+  - nearby residential district recommendations (RPD zones) within 1000m
+- UI includes an embedded interactive Google map (marker-only, no route lines):
+  - black marker: destination
+  - red markers: paid parking suggestions
+  - blue markers: residential parking suggestions
 
 ## Learn More
 
