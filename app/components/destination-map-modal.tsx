@@ -229,7 +229,7 @@ export function DestinationMapModal({
             <p className="mt-2 text-xs">Fallback pin links:</p>
             <div className="mt-1 space-y-1">
               {fallbackPins.map((pin) => (
-                <p key={pin.href}>
+                <p key={`${pin.label}-${pin.href}`}>
                   <a href={pin.href} target="_blank" rel="noopener noreferrer" className="underline">
                     {pin.label}
                   </a>

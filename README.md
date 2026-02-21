@@ -61,6 +61,7 @@ Set your Google Places API key in `.env`:
 
 ```bash
 GOOGLE_MAPS_API_KEY=your_google_maps_api_key
+OPENAI_API_KEY=your_openai_api_key
 ```
 
 Google APIs required for this feature:
@@ -74,6 +75,7 @@ endpoint (`/api/google-maps/client-key`), so you do not need a separate public e
 The app now exposes:
 
 - `POST /api/parking/recommend`
+- `POST /api/parking/parse-trip`
 
 Note: this endpoint requires running Next.js with a server (`npm run dev` / `npm run start`).
 
@@ -82,7 +84,7 @@ Request JSON:
 ```json
 {
   "destination": "Firestone Grill San Luis Obispo",
-  "limit": 2
+  "limit": 5
 }
 ```
 
@@ -98,7 +100,7 @@ Response includes:
 UI output format:
 
 ```text
-Zone <zone number> | <price> | <street> | <intended destination>
+<Paid|Residential> Zone <zone number> | <price> | <street> | <intended destination> | <distance>m away
 ```
 
 Distance behavior:
@@ -112,6 +114,72 @@ Distance behavior:
   - black marker: destination
   - red markers: paid parking suggestions
   - blue markers: residential parking suggestions
+
+## Trip Assistant parsing
+
+Trip Assistant accepts free-text trip prompts, uses an LLM to extract destination + intended
+arrival time, then auto-runs destination parking lookup.
+
+Trip parsing endpoint:
+
+- `POST /api/parking/parse-trip`
+
+Request JSON:
+
+```json
+{
+  "prompt": "Dinner at Firestone Grill tomorrow at 7pm"
+}
+```
+
+Response JSON:
+
+```json
+{
+  "destination": "Firestone Grill",
+  "arrivalTimeIso": "2026-02-22T19:00:00-08:00",
+  "arrivalTimeLabel": "Sun, Feb 22, 2026, 7:00 PM PST",
+  "timezone": "America/Los_Angeles",
+  "confidence": "high",
+  "warnings": []
+}
+```
+
+Fallback behavior:
+
+- If parsing fails (missing key, malformed output, ambiguous time, or LLM error), ParkOS falls back
+  to destination-only parsing:
+  - `destination` is set to the original prompt text
+  - `arrivalTimeIso` / `arrivalTimeLabel` are `null`
+  - response still returns `200` with warnings
+- Arrival time is captured for future traffic-density analysis and is not yet used in recommendation ranking.
+
+## Live location zone detection
+
+The app also exposes:
+
+- `POST /api/parking/current-zone`
+
+Request JSON:
+
+```json
+{
+  "lat": 35.2813,
+  "lng": -120.6612,
+  "accuracyMeters": 22
+}
+```
+
+Behavior:
+
+- Paid zone lookup runs first with a `100m` nearest fallback.
+- If no paid zone matches, residential lookup runs with the same `100m` fallback.
+- Response includes category (`paid` / `residential` / `none`), current zone number, and current rate.
+- Live UI supports:
+  - `Start Live Location` for continuous tracking
+  - `I have parked!` to capture a parked snapshot for payment entry
+
+Note: `Proceed to Payment` is currently an entry-point placeholder and does not yet launch an external payment app.
 
 ## Learn More
 

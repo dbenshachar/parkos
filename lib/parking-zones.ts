@@ -1,5 +1,5 @@
 import parkingZonesGeoJson from "@/data/slo-street-parking.json";
-import payByParkZoneCrosswalk from "@/data/paybypark-zone-crosswalk.json";
+import payByPhoneZoneCrosswalk from "@/data/paybyphone-zone-crosswalk.json";
 
 type Position = [number, number];
 type LinearRing = Position[];
@@ -79,7 +79,7 @@ export type ResidentialZoneRecommendation = {
 };
 
 const rawFeatures = (parkingZonesGeoJson.features ?? []) as unknown as ZoneFeature[];
-const crosswalk = payByParkZoneCrosswalk as Record<string, string>;
+const crosswalk = payByPhoneZoneCrosswalk as Record<string, string>;
 
 function normalizeZone(zone: string | undefined): string | null {
   const value = zone?.trim();
