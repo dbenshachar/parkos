@@ -1,10 +1,14 @@
 import { defineConfig, devices } from "@playwright/test";
-import { chromium } from "playwright-extra";
+import { chromium as baseChromium } from "playwright";
+import { addExtra } from "playwright-extra";
 import stealth from "puppeteer-extra-plugin-stealth";
 
+const chromium = addExtra(baseChromium);
 chromium.use(stealth());
 
 export default defineConfig({
+  timeout: 600000, // 60 seconds per test
+  globalTimeout: 600000, // 10 minutes for the entire test suite
   testDir: "./tests",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,

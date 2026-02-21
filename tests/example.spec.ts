@@ -1,153 +1,308 @@
-import test from "@playwright/test";
+import { test } from "@playwright/test";
 
-const locationNumber = "80511";
-const liscence = "7LBZ281";
+// test("pay_by_phone", async ({ page }) => {
+//   const waitTime = 1500;
 
-test("sign in", async ({ page }) => {
-  const waitTime = 1500;
+//   await page.addInitScript(() => {
+//     window.addEventListener("DOMContentLoaded", () => {
+//       const coords = document.createElement("div");
+//       coords.id = "mouse-coords";
+//       Object.assign(coords.style, {
+//         position: "fixed",
+//         bottom: "20px",
+//         right: "20px",
+//         padding: "8px",
+//         background: "rgba(0, 0, 0, 0.8)",
+//         color: "#fff",
+//         fontFamily: "monospace",
+//         fontSize: "14px",
+//         zIndex: "10000",
+//         borderRadius: "4px",
+//         pointerEvents: "none",
+//       });
+//       document.body.appendChild(coords);
 
-  await page.addInitScript(() => {
-    window.addEventListener("DOMContentLoaded", () => {
-      const coords = document.createElement("div");
-      coords.id = "mouse-coords";
-      Object.assign(coords.style, {
-        position: "fixed",
-        bottom: "20px",
-        right: "20px",
-        padding: "8px",
-        background: "rgba(0, 0, 0, 0.8)",
-        color: "#fff",
-        fontFamily: "monospace",
-        fontSize: "14px",
-        zIndex: "10000",
-        borderRadius: "4px",
-        pointerEvents: "none",
-      });
-      document.body.appendChild(coords);
+//       const dot = document.createElement("div");
+//       Object.assign(dot.style, {
+//         position: "fixed",
+//         width: "10px",
+//         height: "10px",
+//         background: "red",
+//         borderRadius: "50%",
+//         zIndex: "10001",
+//         pointerEvents: "none",
+//         transform: "translate(-50%, -50%)",
+//       });
+//       document.body.appendChild(dot);
 
-      const dot = document.createElement("div");
-      Object.assign(dot.style, {
-        position: "fixed",
-        width: "10px",
-        height: "10px",
-        background: "red",
-        borderRadius: "50%",
-        zIndex: "10001",
-        pointerEvents: "none",
-        transform: "translate(-50%, -50%)",
-      });
-      document.body.appendChild(dot);
+//       window.addEventListener("mousemove", (e) => {
+//         const tuple = `(${e.clientX}, ${e.clientY})`;
+//         coords.textContent = tuple;
+//         dot.style.left = `${e.clientX}px`;
+//         dot.style.top = `${e.clientY}px`;
+//       });
+//     });
+//   });
 
-      window.addEventListener("mousemove", (e) => {
-        const tuple = `(${e.clientX}, ${e.clientY})`;
-        coords.textContent = tuple;
-        dot.style.left = `${e.clientX}px`;
-        dot.style.top = `${e.clientY}px`;
-      });
-    });
-  });
+//   await page.goto("https://m.paybyphone.com/", {
+//     waitUntil: "domcontentloaded",
+//   });
+//   await page.setViewportSize({ width: 1280, height: 720 });
 
-  await page.goto("https://m.paybyphone.com/", {
-    waitUntil: "domcontentloaded",
-  });
-  await page.setViewportSize({ width: 1280, height: 720 });
+//   await page.locator("canvas").click({
+//     position: { x: 975, y: 600 },
+//     force: true,
+//   });
+//   await page.waitForTimeout(waitTime);
 
-  await page.locator("canvas").click({
-    position: { x: 975, y: 600 },
-    force: true,
-  });
-  await page.waitForTimeout(waitTime);
+//   await page.locator("canvas").click({
+//     position: { x: 400, y: 650 },
+//     force: true,
+//   });
+//   await page.waitForTimeout(waitTime);
 
-  await page.locator("canvas").click({
-    position: { x: 400, y: 650 },
-    force: true,
-  });
-  await page.waitForTimeout(waitTime);
+//   await page.locator("canvas").click({
+//     position: { x: 400, y: 625 },
+//     force: true,
+//   });
+//   await page.waitForTimeout(waitTime);
 
-  await page.locator("canvas").click({
-    position: { x: 400, y: 625 },
-    force: true,
-  });
-  await page.waitForTimeout(waitTime);
+//   await page.mouse.wheel(0, 1000);
 
-  await page.mouse.wheel(0, 1000);
+//   await page.locator("canvas").click({
+//     position: { x: 650, y: 700 },
+//     force: true,
+//   });
+//   await page.waitForTimeout(waitTime);
 
-  await page.locator("canvas").click({
-    position: { x: 650, y: 700 },
-    force: true,
-  });
-  await page.waitForTimeout(waitTime);
+//   await page.locator("canvas").click({
+//     position: { x: 650, y: 700 },
+//     force: true,
+//   });
+//   await page.waitForTimeout(waitTime * 5);
 
-  await page.locator("canvas").click({
-    position: { x: 650, y: 700 },
-    force: true,
-  });
-  await page.waitForTimeout(waitTime * 5);
+//   // signed in
 
-  // signed in
+//   await page.locator("canvas").click({
+//     position: { x: 650, y: 110 },
+//     force: true,
+//   });
+//   await page.waitForTimeout(waitTime);
 
-  await page.locator("canvas").click({
-    position: { x: 650, y: 110 },
-    force: true,
-  });
-  await page.waitForTimeout(waitTime);
+//   await page.keyboard.type(locationNumber);
+//   await page.keyboard.press("Enter");
 
-  await page.keyboard.type(locationNumber);
-  await page.keyboard.press("Enter");
+//   await page.locator("canvas").click({
+//     position: { x: 784, y: 664 },
+//     force: true,
+//   });
+//   await page.waitForTimeout(waitTime * 2);
 
-  await page.locator("canvas").click({
-    position: { x: 784, y: 664 },
-    force: true,
-  });
-  await page.waitForTimeout(waitTime * 2);
+//   await page.locator("canvas").click({
+//     position: { x: 610, y: 165 },
+//     force: true,
+//   });
+//   await page.waitForTimeout(waitTime);
 
-  await page.locator("canvas").click({
-    position: { x: 610, y: 165 },
-    force: true,
-  });
-  await page.waitForTimeout(waitTime);
+//   await page.locator("canvas").click({
+//     position: { x: 630, y: 680 },
+//     force: true,
+//   });
+//   await page.waitForTimeout(waitTime);
 
-  await page.locator("canvas").click({
-    position: { x: 630, y: 680 },
-    force: true,
-  });
-  await page.waitForTimeout(waitTime);
+//   // state
+//   await page.locator("canvas").click({
+//     position: { x: 540, y: 400 },
+//     force: true,
+//   });
+//   await page.waitForTimeout(waitTime);
 
-  // state
-  await page.locator("canvas").click({
-    position: { x: 540, y: 400 },
-    force: true,
-  });
-  await page.waitForTimeout(waitTime);
+//   // liscence
+//   await page.locator("canvas").click({
+//     position: { x: 580, y: 280 },
+//     force: true,
+//   });
+//   await page.keyboard.type(liscence);
+//   await page.waitForTimeout(waitTime);
 
-  // liscence
-  await page.locator("canvas").click({
-    position: { x: 580, y: 280 },
-    force: true,
-  });
-  await page.keyboard.type(liscence);
-  await page.waitForTimeout(waitTime);
+//   await page.locator("canvas").click({
+//     position: { x: 640, y: 351 },
+//     force: true,
+//   });
+//   await page.waitForTimeout(waitTime);
+//   await page.locator("canvas").click({
+//     position: { x: 490, y: 513 },
+//     force: true,
+//   });
 
-  await page.locator("canvas").click({
-    position: { x: 640, y: 351 },
-    force: true,
-  });
-  await page.waitForTimeout(waitTime);
-  await page.locator("canvas").click({
-    position: { x: 490, y: 513 },
-    force: true,
-  });
+//   await page.locator("canvas").click({
+//     position: { x: 525, y: 226 },
+//     force: true,
+//   });
+//   await page.waitForTimeout(waitTime);
 
-  await page.locator("canvas").click({
-    position: { x: 525, y: 226 },
-    force: true,
-  });
-  await page.waitForTimeout(waitTime);
+//   await page.locator("canvas").click({
+//     position: { x: 514, y: 404 },
+//     force: true,
+//   });
+//   await page.waitForTimeout(waitTime);
 
-  await page.locator("canvas").click({
-    position: { x: 514, y: 404 },
-    force: true,
-  });
+//   // click add vechile
+//   await page.locator("canvas").click({
+//     position: { x: 700, y: 700 },
+//     force: true,
+//   });
+//   await page.waitForTimeout(waitTime);
 
-  await page.pause();
-});
+//   // enter duration
+//   await page.locator("canvas").click({
+//     position: { x: 605, y: 461 },
+//     force: true,
+//   });
+//   await page.keyboard.type(duration);
+//   await page.waitForTimeout(waitTime);
+
+//   // click continue
+//   await page.locator("canvas").click({
+//     position: { x: 535, y: 519 },
+//     force: true,
+//   });
+//   await page.waitForTimeout(waitTime);
+
+//   // skip phone number
+//   await page.locator("canvas").click({
+//     position: { x: 650, y: 683 },
+//     force: true,
+//   });
+//   await page.waitForTimeout(waitTime);
+
+//   await page.locator("canvas").click({
+//     position: { x: 546, y: 575 },
+//     force: true,
+//   });
+//   await page.waitForTimeout(waitTime);
+
+//   await page.locator("canvas").click({
+//     position: { x: 528, y: 689 },
+//     force: true,
+//   });
+//   await page.waitForTimeout(waitTime);
+
+//   // add credit card info
+//   await page.locator("canvas").click({
+//     position: { x: 419, y: 187 },
+//     force: true,
+//   });
+//   await page.keyboard.type(cardNumber);
+//   await page.waitForTimeout(waitTime);
+
+//   await page.locator("canvas").click({
+//     position: { x: 417, y: 245 },
+//     force: true,
+//   });
+//   await page.keyboard.type(cardExpiration);
+//   await page.waitForTimeout(waitTime);
+
+//   await page.locator("canvas").click({
+//     position: { x: 722, y: 256 },
+//     force: true,
+//   });
+//   await page.keyboard.type(cardCCV);
+//   await page.waitForTimeout(waitTime);
+
+//   await page.locator("canvas").click({
+//     position: { x: 446, y: 308 },
+//     force: true,
+//   });
+//   await page.keyboard.type(name);
+//   await page.waitForTimeout(waitTime);
+
+//   await page.locator("canvas").click({
+//     position: { x: 464, y: 408 },
+//     force: true,
+//   });
+//   await page.keyboard.type(email);
+//   await page.waitForTimeout(waitTime);
+
+//   await page.locator("canvas").click({
+//     position: { x: 384, y: 491 },
+//     force: true,
+//   });
+//   await page.keyboard.type(zipCode);
+//   await page.waitForTimeout(waitTime);
+
+//   await page.locator("canvas").click({
+//     position: { x: 629, y: 683 },
+//     force: true,
+//   });
+//   await page.waitForTimeout(waitTime * 5);
+
+//   await page.pause();
+// });
+
+// test("park_mobile", async ({ page }) => {
+//   await page.addInitScript(() => {
+//     window.addEventListener("DOMContentLoaded", () => {
+//       const coords = document.createElement("div");
+//       coords.id = "mouse-coords";
+//       Object.assign(coords.style, {
+//         position: "fixed",
+//         bottom: "20px",
+//         right: "20px",
+//         padding: "8px",
+//         background: "rgba(0, 0, 0, 0.8)",
+//         color: "#fff",
+//         fontFamily: "monospace",
+//         fontSize: "14px",
+//         zIndex: "10000",
+//         borderRadius: "4px",
+//         pointerEvents: "none",
+//       });
+//       document.body.appendChild(coords);
+
+//       const dot = document.createElement("div");
+//       Object.assign(dot.style, {
+//         position: "fixed",
+//         width: "10px",
+//         height: "10px",
+//         background: "red",
+//         borderRadius: "50%",
+//         zIndex: "10001",
+//         pointerEvents: "none",
+//         transform: "translate(-50%, -50%)",
+//       });
+//       document.body.appendChild(dot);
+
+//       window.addEventListener("mousemove", (e) => {
+//         const tuple = `(${e.clientX}, ${e.clientY})`;
+//         coords.textContent = tuple;
+//         dot.style.left = `${e.clientX}px`;
+//         dot.style.top = `${e.clientY}px`;
+//       });
+//     });
+//   });
+//   await page.goto(
+//     `https://app.parkmobile.io/checkout/reservation/${spot_id}?start_at=2026-02-21T13%3A48%3A00-08%3A00&stop_at=2026-02-21T14%3A03%3A00-08%3A00&location_origin=flash&cart_id=0`,
+//     {
+//       waitUntil: "domcontentloaded",
+//     },
+//   );
+//   await page.setViewportSize({ width: 1000, height: 500 });
+//   page.waitForTimeout(3000);
+
+//   const clickPosition = async (x: number, y: number, waitTime?: number) => {
+//     await page.locator("canvas").click({
+//       position: { x: 514, y: 404 },
+//       force: true,
+//     });
+//     await page.waitForTimeout(waitTime ?? defaultWaitTime);
+//   };
+
+//   // click on close cookie popup
+//   clickPosition(583, 270);
+
+//   // enter contact info
+//   await page.mouse.wheel(0, 1000);
+
+//   await page.pause();
+// });
