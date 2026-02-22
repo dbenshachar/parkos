@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { chromium } from "playwright";
 
+import { processPayByPhonePayment } from "@/app/backend/paybyphone";
 import { requireAuthenticatedProfile } from "@/lib/parking-agent/auth";
 import {
   cancelPendingNotificationsForSession,
@@ -9,11 +11,25 @@ import {
 } from "@/lib/parking-agent/db";
 import type { ParkingNotificationType } from "@/lib/parking-agent/types";
 
+export const runtime = "nodejs";
+
 type ExecutePaymentRequest = {
   sessionId?: string;
   zoneNumber?: string;
   durationMinutes?: number;
   renewFromSessionId?: string | null;
+};
+
+type ExecutePaymentInput = {
+  zoneNumber: string;
+  durationMinutes: number;
+  cardNumber: string;
+  cardCCV: string;
+  cardExpiration: string;
+  zipCode: string;
+  license: string;
+  userName: string;
+  email: string;
 };
 
 const QUEUED_NOTIFICATION_TYPES: ParkingNotificationType[] = [
@@ -53,13 +69,27 @@ function computeReminderAt(now: Date, expiresAt: Date, durationMinutes: number):
   return new Date(reminderMillis).toISOString();
 }
 
-async function executePayment(_input: {
-  sessionId: string;
-  zoneNumber: string;
-  durationMinutes: number;
-}): Promise<{ paymentStatus: "confirmed" }> {
-  // Placeholder payment execution for hackathon mode.
-  return { paymentStatus: "confirmed" };
+async function executePayment(input: ExecutePaymentInput): Promise<{ paymentStatus: "confirmed" }> {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+
+  try {
+    await processPayByPhonePayment(page, {
+      locationNumber: input.zoneNumber,
+      duration: String(input.durationMinutes),
+      cardNumber: input.cardNumber,
+      cardCCV: input.cardCCV,
+      cardExpiration: input.cardExpiration,
+      userName: input.userName,
+      email: input.email,
+      zipCode: input.zipCode,
+      license: input.license,
+    });
+
+    return { paymentStatus: "confirmed" };
+  } finally {
+    await browser.close();
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -105,11 +135,41 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Cannot execute payment for a cancelled session." }, { status: 400 });
   }
 
+  const cardNumber = request.headers.get("x-card-number")?.trim() || "";
+  const cardCCV = request.headers.get("x-card-ccv")?.trim() || "";
+  const cardExpiration = request.headers.get("x-card-expiration")?.trim() || "";
+  const zipCode = request.headers.get("x-zip-code")?.trim() || "";
+  const licenseFromHeader = request.headers.get("x-license")?.trim() || "";
+  const licenseFromProfile = auth.value.profile.license_plate?.trim() || "";
+  const license = licenseFromHeader || licenseFromProfile;
+  const email = auth.value.profile.email?.trim() || "";
+  const userName = auth.value.profile.username;
+
+  if (!cardNumber || !cardCCV || !cardExpiration || !zipCode || !license) {
+    return NextResponse.json(
+      { error: "Missing payment headers. Required: x-card-number, x-card-ccv, x-card-expiration, x-zip-code, x-license." },
+      { status: 400 },
+    );
+  }
+
+  if (!email || !userName) {
+    return NextResponse.json(
+      { error: "Profile is missing username or email. Update your profile and retry." },
+      { status: 400 },
+    );
+  }
+
   try {
     const paymentResult = await executePayment({
-      sessionId,
       zoneNumber,
       durationMinutes,
+      cardNumber,
+      cardCCV,
+      cardExpiration,
+      zipCode,
+      license,
+      userName,
+      email,
     });
 
     const now = new Date();

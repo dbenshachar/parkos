@@ -1,11 +1,11 @@
+import "server-only";
 import { Page } from "playwright";
 
-interface UserInfo {
+export interface PayByPhoneInfo {
   locationNumber: string;
   cardNumber: string;
   cardCCV: string;
   cardExpiration: string;
-  name: string;
   email: string;
   zipCode: string;
   duration: string;
@@ -14,7 +14,10 @@ interface UserInfo {
 }
 
 const waitTime = 2000;
-export const processPayByPhonePayment = async (page: Page, info: UserInfo) => {
+export const processPayByPhonePayment = async (
+  page: Page,
+  info: PayByPhoneInfo,
+) => {
   const {
     locationNumber,
     cardNumber,

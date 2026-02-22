@@ -54,12 +54,20 @@ export async function POST(request: NextRequest) {
   const carModel = parseRequiredText(body.carModel);
   const licensePlate = normalizePlate(parseRequiredText(body.licensePlate));
   const carColor = parseOptionalText(body.carColor);
-  const licensePlateState = parseOptionalText(body.licensePlateState)?.toUpperCase() || null;
+  const licensePlateState =
+    parseOptionalText(body.licensePlateState)?.toUpperCase() || null;
   const phoneE164 = normalizePhoneE164(body.phoneE164);
   const smsOptIn = body.smsOptIn === true;
   const smsOptInAt = smsOptIn ? new Date().toISOString() : null;
 
-  if (!username || !password || !email || !carMake || !carModel || !licensePlate) {
+  if (
+    !username ||
+    !password ||
+    !email ||
+    !carMake ||
+    !carModel ||
+    !licensePlate
+  ) {
     return NextResponse.json(
       {
         error:
@@ -69,19 +77,31 @@ export async function POST(request: NextRequest) {
     );
   }
   if (password.length < 8) {
-    return NextResponse.json({ error: "Password must be at least 8 characters." }, { status: 400 });
+    return NextResponse.json(
+      { error: "Password must be at least 8 characters." },
+      { status: 400 },
+    );
   }
   if (phoneE164 && !E164_PHONE_REGEX.test(phoneE164)) {
-    return NextResponse.json({ error: "Phone number must be in E.164 format (e.g. +15551234567)." }, { status: 400 });
+    return NextResponse.json(
+      { error: "Phone number must be in E.164 format (e.g. +15551234567)." },
+      { status: 400 },
+    );
   }
   if (smsOptIn && !phoneE164) {
-    return NextResponse.json({ error: "A phone number is required when SMS reminders are enabled." }, { status: 400 });
+    return NextResponse.json(
+      { error: "A phone number is required when SMS reminders are enabled." },
+      { status: 400 },
+    );
   }
 
   const config = getSupabaseConfig();
   if (!config) {
     return NextResponse.json(
-      { error: "Missing SUPABASE_URL or SUPABASE_API_KEY environment variables." },
+      {
+        error:
+          "Missing SUPABASE_URL or SUPABASE_API_KEY environment variables.",
+      },
       { status: 500 },
     );
   }
@@ -99,28 +119,40 @@ export async function POST(request: NextRequest) {
       !verifyPassword(password, existingProfile.value.password_hash)
     ) {
       return NextResponse.json(
-        { error: "Username already exists. Use the correct password to log in." },
+        {
+          error: "Username already exists. Use the correct password to log in.",
+        },
         { status: 401 },
       );
     }
 
-    const updatedProfile = await updateProfile(config, existingProfile.value.id, {
-      passwordHash,
-      email,
-      carMake,
-      carModel,
-      carColor,
-      licensePlate,
-      licensePlateState,
-      phoneE164,
-      smsOptIn,
-      smsOptInAt,
-    });
+    const updatedProfile = await updateProfile(
+      config,
+      existingProfile.value.id,
+      {
+        passwordHash,
+        email,
+        carMake,
+        carModel,
+        carColor,
+        licensePlate,
+        licensePlateState,
+        phoneE164,
+        smsOptIn,
+        smsOptInAt,
+      },
+    );
     if (!updatedProfile.ok) {
-      return NextResponse.json({ error: updatedProfile.error }, { status: 502 });
+      return NextResponse.json(
+        { error: updatedProfile.error },
+        { status: 502 },
+      );
     }
     if (!updatedProfile.value.id || !updatedProfile.value.username) {
-      return NextResponse.json({ error: "Account update returned invalid data." }, { status: 502 });
+      return NextResponse.json(
+        { error: "Account update returned invalid data." },
+        { status: 502 },
+      );
     }
 
     const response = NextResponse.json(
@@ -154,13 +186,24 @@ export async function POST(request: NextRequest) {
   });
 
   if (!createdProfile.ok) {
-    if (createdProfile.status === 409 || isUniqueConstraintError(createdProfile.error)) {
-      return NextResponse.json({ error: "Username already exists. Please choose a different username." }, { status: 409 });
+    if (
+      createdProfile.status === 409 ||
+      isUniqueConstraintError(createdProfile.error)
+    ) {
+      return NextResponse.json(
+        {
+          error: "Username already exists. Please choose a different username.",
+        },
+        { status: 409 },
+      );
     }
     return NextResponse.json({ error: createdProfile.error }, { status: 502 });
   }
   if (!createdProfile.value.id || !createdProfile.value.username) {
-    return NextResponse.json({ error: "Account creation returned invalid data." }, { status: 502 });
+    return NextResponse.json(
+      { error: "Account creation returned invalid data." },
+      { status: 502 },
+    );
   }
 
   const response = NextResponse.json(

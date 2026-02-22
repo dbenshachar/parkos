@@ -166,13 +166,6 @@ type CaptureParkingSessionResponse = {
   rulesRundown: RulesRundown;
 };
 
-type ExecutePaymentResponse = {
-  ok: boolean;
-  paymentStatus: "confirmed";
-  expiresAt: string;
-  queuedNotifications: Array<"payment_confirmed" | "post_payment_info" | "renew_reminder" | "parking_expired">;
-};
-
 type ResumeParkingSessionResponse = {
   ok: boolean;
   session: {
@@ -209,14 +202,6 @@ const GEOLOCATION_OPTIONS: PositionOptions = {
 
 const LIVE_LOOKUP_DEBOUNCE_MS = 1_000;
 const LIVE_LOOKUP_MIN_MOVEMENT_METERS = 8;
-const POST_PAYMENT_INFO_DELAY_MS = 30_000;
-const SHORT_DURATION_REMINDER_DELAY_MS = 60_000;
-const RENEW_REMINDER_LEAD_MS = 10 * 60_000;
-
-type ScheduledTick = {
-  label: "payment_confirmed" | "post_payment_info" | "renew_reminder" | "parking_expired";
-  delayMs: number;
-};
 
 function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const earthRadiusMeters = 6_371_000;
@@ -319,7 +304,6 @@ export function ZoneLookupForm() {
 
   const watchIdRef = useRef<number | null>(null);
   const debounceTimerRef = useRef<number | null>(null);
-  const tickTimerIdsRef = useRef<number[]>([]);
   const lastSentLocationRef = useRef<LiveCoordinates | null>(null);
   const latestLocationRef = useRef<LiveCoordinates | null>(null);
   const loadedResumeTokenRef = useRef<string | null>(null);
@@ -368,58 +352,6 @@ export function ZoneLookupForm() {
     return (await response.json()) as CurrentZoneResponse;
   };
 
-  const runParkingAgentTick = async () => {
-    await fetch("/api/jobs/parking-agent-tick", {
-      method: "POST",
-      headers: {
-        "x-parkos-user-trigger": "1",
-      },
-      credentials: "same-origin",
-      cache: "no-store",
-    });
-  };
-
-  const clearScheduledTicks = () => {
-    for (const timerId of tickTimerIdsRef.current) {
-      window.clearTimeout(timerId);
-    }
-    tickTimerIdsRef.current = [];
-  };
-
-  const computeScheduledTicks = (durationMinutes: number, expiresAtIso: string): ScheduledTick[] => {
-    const nowMs = Date.now();
-    const parsedExpiryMs = Date.parse(expiresAtIso);
-    const fallbackExpiryMs = nowMs + durationMinutes * 60_000;
-    const expiresAtMs = Number.isFinite(parsedExpiryMs) ? parsedExpiryMs : fallbackExpiryMs;
-    const expiresDelayMs = Math.max(0, expiresAtMs - nowMs);
-
-    const renewDelayMs =
-      durationMinutes < 10
-        ? SHORT_DURATION_REMINDER_DELAY_MS
-        : Math.max(SHORT_DURATION_REMINDER_DELAY_MS, expiresDelayMs - RENEW_REMINDER_LEAD_MS);
-
-    return [
-      { label: "payment_confirmed", delayMs: 0 },
-      { label: "post_payment_info", delayMs: POST_PAYMENT_INFO_DELAY_MS },
-      { label: "renew_reminder", delayMs: renewDelayMs },
-      { label: "parking_expired", delayMs: expiresDelayMs },
-    ];
-  };
-
-  const scheduleNotificationTicks = (durationMinutes: number, expiresAtIso: string) => {
-    clearScheduledTicks();
-    const schedule = computeScheduledTicks(durationMinutes, expiresAtIso);
-
-    for (const item of schedule) {
-      const timerId = window.setTimeout(() => {
-        void runParkingAgentTick().catch(() => {
-          // If user-triggered polling fails, server cron can still deliver queued notifications.
-        });
-      }, item.delayMs);
-      tickTimerIdsRef.current.push(timerId);
-    }
-  };
-
   const captureParkingSession = async (coords: LiveCoordinates): Promise<CaptureParkingSessionResponse> => {
     const response = await fetch("/api/parking/session/capture", {
       method: "POST",
@@ -439,33 +371,6 @@ export function ZoneLookupForm() {
     }
 
     return (await response.json()) as CaptureParkingSessionResponse;
-  };
-
-  const executeParkingPayment = async (
-    sessionId: string,
-    zoneNumber: string,
-    durationMinutes: number,
-    renewSourceSessionId: string | null,
-  ): Promise<ExecutePaymentResponse> => {
-    const response = await fetch("/api/parking/payment/execute", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        sessionId,
-        zoneNumber,
-        durationMinutes,
-        renewFromSessionId: renewSourceSessionId,
-      }),
-    });
-
-    if (!response.ok) {
-      const payload = (await response.json().catch(() => ({}))) as ParkingSessionError;
-      throw new Error(payload.error ?? "Failed to execute parking payment.");
-    }
-
-    return (await response.json()) as ExecutePaymentResponse;
   };
 
   const loadParkingSessionFromToken = async (resumeToken: string): Promise<ResumeParkingSessionResponse> => {
@@ -547,7 +452,6 @@ export function ZoneLookupForm() {
       if (debounceTimerRef.current !== null) {
         window.clearTimeout(debounceTimerRef.current);
       }
-      clearScheduledTicks();
     };
   }, []);
 
@@ -898,21 +802,19 @@ export function ZoneLookupForm() {
     setPaymentExecuting(true);
     setPaymentEntryMessage(null);
     try {
-      const payment = await executeParkingPayment(
-        parkingSessionId,
-        normalizedZone,
-        duration,
-        renewFromSessionId,
-      );
-      scheduleNotificationTicks(duration, payment.expiresAt);
-      setRenewFromSessionId(null);
-      setPaymentEntryMessage(
-        `Payment ${payment.paymentStatus}. Expires at ${formatTimestamp(payment.expiresAt)}. Notification worker scheduled for all SMS steps.`,
-      );
+      const params = new URLSearchParams({
+        sessionId: parkingSessionId,
+        zoneNumber: normalizedZone,
+        durationMinutes: String(duration),
+      });
+      if (renewFromSessionId) {
+        params.set("renewFromSessionId", renewFromSessionId);
+      }
+
+      window.location.assign(`/parking/payment?${params.toString()}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Payment execution failed.";
+      const message = error instanceof Error ? error.message : "Failed to open payment page.";
       setPaymentEntryMessage(message);
-    } finally {
       setPaymentExecuting(false);
     }
   };
@@ -1333,7 +1235,7 @@ export function ZoneLookupForm() {
                 disabled={paymentExecuting}
                 className="mt-3 rounded-md bg-black px-3 py-2 text-sm font-medium text-white hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-70"
               >
-                {paymentExecuting ? "Processing..." : "Confirm"}
+                {paymentExecuting ? "Opening..." : "Confirm and Pay"}
               </button>
             </div>
 

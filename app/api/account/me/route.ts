@@ -36,13 +36,19 @@ function unauthorizedResponse(message: string): NextResponse {
 export async function GET(request: NextRequest) {
   const session = getAuthSession(request);
   if (!session) {
-    return NextResponse.json({ error: "Please log in to view your profile." }, { status: 401 });
+    return NextResponse.json(
+      { error: "Please log in to view your profile." },
+      { status: 401 },
+    );
   }
 
   const config = getSupabaseConfig();
   if (!config) {
     return NextResponse.json(
-      { error: "Missing SUPABASE_URL or SUPABASE_API_KEY environment variables." },
+      {
+        error:
+          "Missing SUPABASE_URL or SUPABASE_API_KEY environment variables.",
+      },
       { status: 500 },
     );
   }
@@ -63,7 +69,10 @@ export async function GET(request: NextRequest) {
   const clientProfile = mapProfileForClient(profile);
   if (!clientProfile) {
     return NextResponse.json(
-      { error: "Saved account data is incomplete. Please recreate your account details." },
+      {
+        error:
+          "Saved account data is incomplete. Please recreate your account details.",
+      },
       { status: 500 },
     );
   }
@@ -81,7 +90,10 @@ export async function GET(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   const session = getAuthSession(request);
   if (!session) {
-    return NextResponse.json({ error: "Please log in to update your profile." }, { status: 401 });
+    return NextResponse.json(
+      { error: "Please log in to update your profile." },
+      { status: 401 },
+    );
   }
 
   let body: UpdateProfileRequest;
@@ -94,37 +106,63 @@ export async function PATCH(request: NextRequest) {
   const config = getSupabaseConfig();
   if (!config) {
     return NextResponse.json(
-      { error: "Missing SUPABASE_URL or SUPABASE_API_KEY environment variables." },
+      {
+        error:
+          "Missing SUPABASE_URL or SUPABASE_API_KEY environment variables.",
+      },
       { status: 500 },
     );
   }
 
-  const existingProfileResult = await fetchProfileById(config, session.profileId);
+  const existingProfileResult = await fetchProfileById(
+    config,
+    session.profileId,
+  );
   if (!existingProfileResult.ok) {
-    return NextResponse.json({ error: existingProfileResult.error }, { status: 502 });
+    return NextResponse.json(
+      { error: existingProfileResult.error },
+      { status: 502 },
+    );
   }
 
   const existingProfile = existingProfileResult.value;
   if (!existingProfile?.id) {
     return unauthorizedResponse("Session expired. Please log in again.");
   }
-  if (existingProfile.username && existingProfile.username !== session.username) {
+  if (
+    existingProfile.username &&
+    existingProfile.username !== session.username
+  ) {
     return unauthorizedResponse("Session is invalid. Please log in again.");
   }
 
-  const email = normalizeEmail(parseRequiredText(body.email ?? existingProfile.email));
+  const email = normalizeEmail(
+    parseRequiredText(body.email ?? existingProfile.email),
+  );
   const carMake = parseRequiredText(body.carMake ?? existingProfile.car_make);
-  const carModel = parseRequiredText(body.carModel ?? existingProfile.car_model);
-  const licensePlate = normalizePlate(parseRequiredText(body.licensePlate ?? existingProfile.license_plate));
+  const carModel = parseRequiredText(
+    body.carModel ?? existingProfile.car_model,
+  );
+  const licensePlate = normalizePlate(
+    parseRequiredText(body.licensePlate ?? existingProfile.license_plate),
+  );
   const carColor =
-    body.carColor !== undefined ? parseOptionalText(body.carColor) : parseOptionalText(existingProfile.car_color);
+    body.carColor !== undefined
+      ? parseOptionalText(body.carColor)
+      : parseOptionalText(existingProfile.car_color);
   const licensePlateState =
     body.licensePlateState !== undefined
       ? parseOptionalText(body.licensePlateState)?.toUpperCase() || null
-      : parseOptionalText(existingProfile.license_plate_state)?.toUpperCase() || null;
+      : parseOptionalText(existingProfile.license_plate_state)?.toUpperCase() ||
+        null;
   const phoneE164 =
-    body.phoneE164 !== undefined ? normalizePhoneE164(body.phoneE164) : normalizePhoneE164(existingProfile.phone_e164);
-  const smsOptIn = body.smsOptIn !== undefined ? body.smsOptIn === true : Boolean(existingProfile.sms_opt_in);
+    body.phoneE164 !== undefined
+      ? normalizePhoneE164(body.phoneE164)
+      : normalizePhoneE164(existingProfile.phone_e164);
+  const smsOptIn =
+    body.smsOptIn !== undefined
+      ? body.smsOptIn === true
+      : Boolean(existingProfile.sms_opt_in);
   const smsOptInAt = smsOptIn
     ? existingProfile.sms_opt_in_at || new Date().toISOString()
     : null;
@@ -132,7 +170,8 @@ export async function PATCH(request: NextRequest) {
   if (!email || !carMake || !carModel || !licensePlate) {
     return NextResponse.json(
       {
-        error: "Required fields missing: email, carMake, carModel, and licensePlate are required.",
+        error:
+          "Required fields missing: email, carMake, carModel, and licensePlate are required.",
       },
       { status: 400 },
     );
@@ -140,13 +179,22 @@ export async function PATCH(request: NextRequest) {
 
   const nextPassword = body.password || "";
   if (nextPassword && nextPassword.length < 8) {
-    return NextResponse.json({ error: "Password must be at least 8 characters." }, { status: 400 });
+    return NextResponse.json(
+      { error: "Password must be at least 8 characters." },
+      { status: 400 },
+    );
   }
   if (phoneE164 && !E164_PHONE_REGEX.test(phoneE164)) {
-    return NextResponse.json({ error: "Phone number must be in E.164 format (e.g. +15551234567)." }, { status: 400 });
+    return NextResponse.json(
+      { error: "Phone number must be in E.164 format (e.g. +15551234567)." },
+      { status: 400 },
+    );
   }
   if (smsOptIn && !phoneE164) {
-    return NextResponse.json({ error: "A phone number is required when SMS reminders are enabled." }, { status: 400 });
+    return NextResponse.json(
+      { error: "A phone number is required when SMS reminders are enabled." },
+      { status: 400 },
+    );
   }
 
   const saveResult = await updateProfile(config, existingProfile.id, {
@@ -168,7 +216,10 @@ export async function PATCH(request: NextRequest) {
 
   const savedProfile = mapProfileForClient(saveResult.value);
   if (!savedProfile) {
-    return NextResponse.json({ error: "Saved account data is incomplete." }, { status: 500 });
+    return NextResponse.json(
+      { error: "Saved account data is incomplete." },
+      { status: 500 },
+    );
   }
 
   return NextResponse.json(
