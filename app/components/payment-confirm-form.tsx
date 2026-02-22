@@ -9,6 +9,14 @@ import {
   loadStoredPaymentProfile,
   saveStoredPaymentProfile,
 } from "@/lib/payment-profile-storage";
+import {
+  PAYMENT_DETAILS_VALIDATION_CODES,
+  type PaymentDetailsField,
+  type PaymentDetailsValidationCode,
+  type StoredPaymentDetailsValidationResult,
+  validatePaymentDetails,
+  validateStoredPaymentDetails,
+} from "@/lib/payment-details-validation";
 
 type PendingPaymentRequest = {
   sessionId: string;
@@ -18,6 +26,9 @@ type PendingPaymentRequest = {
 };
 
 type PaymentExecuteError = {
+  code?: PaymentDetailsValidationCode;
+  missingFields?: PaymentDetailsField[];
+  invalidFields?: PaymentDetailsField[];
   error?: string;
 };
 
@@ -44,6 +55,8 @@ type PaymentDetailsState = {
   zipCode: string;
   license: string;
 };
+
+type PaymentDetailsFieldErrors = Partial<Record<PaymentDetailsField, string>>;
 
 const POST_PAYMENT_INFO_DELAY_MS = 30_000;
 const SHORT_DURATION_REMINDER_DELAY_MS = 60_000;
@@ -92,6 +105,61 @@ function formatTimestamp(iso: string): string {
   }).format(date);
 }
 
+const FIELD_ORDER: PaymentDetailsField[] = ["cardNumber", "cardExpiration", "cardCCV", "zipCode", "license"];
+
+const MISSING_FIELD_MESSAGES: Record<PaymentDetailsField, string> = {
+  cardNumber: "Card number is required.",
+  cardCCV: "CCV is required for every payment and is never saved.",
+  cardExpiration: "Card expiration is required.",
+  zipCode: "ZIP code is required.",
+  license: "License plate is required.",
+};
+
+const INVALID_FIELD_MESSAGES: Record<PaymentDetailsField, string> = {
+  cardNumber: "Enter a valid card number.",
+  cardCCV: "CCV must be 3 or 4 digits.",
+  cardExpiration: "Expiration must be MM/YY and cannot be in the past.",
+  zipCode: "Enter a valid ZIP/postal code.",
+  license: "Enter a valid license plate.",
+};
+
+function mergeFieldErrors(
+  missingFields: readonly PaymentDetailsField[],
+  invalidFields: readonly PaymentDetailsField[],
+): PaymentDetailsFieldErrors {
+  const next: PaymentDetailsFieldErrors = {};
+  for (const field of missingFields) {
+    next[field] = MISSING_FIELD_MESSAGES[field];
+  }
+  for (const field of invalidFields) {
+    next[field] = INVALID_FIELD_MESSAGES[field];
+  }
+  return next;
+}
+
+function firstFieldErrorMessage(fieldErrors: PaymentDetailsFieldErrors): string | null {
+  for (const field of FIELD_ORDER) {
+    if (fieldErrors[field]) {
+      return fieldErrors[field] || null;
+    }
+  }
+  return null;
+}
+
+function isPaymentValidationCode(value: unknown): value is PaymentDetailsValidationCode {
+  return typeof value === "string" && (PAYMENT_DETAILS_VALIDATION_CODES as readonly string[]).includes(value);
+}
+
+function staleStoredDetailsMessage(validation: StoredPaymentDetailsValidationResult): string | null {
+  if (validation.invalidFields.includes("cardExpiration")) {
+    return "Saved card expiration is invalid or expired. Update expiration and enter CCV to continue.";
+  }
+  if (validation.missingFields.length > 0 || validation.invalidFields.length > 0) {
+    return "Saved payment details need review. Update highlighted fields before confirming payment.";
+  }
+  return null;
+}
+
 export function PaymentConfirmForm() {
   const [request, setRequest] = useState<PendingPaymentRequest | null>(null);
   const [loadingRequest, setLoadingRequest] = useState(true);
@@ -104,6 +172,7 @@ export function PaymentConfirmForm() {
     zipCode: "",
     license: "",
   });
+  const [fieldErrors, setFieldErrors] = useState<PaymentDetailsFieldErrors>({});
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -113,6 +182,32 @@ export function PaymentConfirmForm() {
   const [unlockError, setUnlockError] = useState<string | null>(null);
   const [accountUsername, setAccountUsername] = useState("");
   const tickTimerIdsRef = useRef<number[]>([]);
+
+  const applyStoredProfileValidation = (
+    profile: Pick<PaymentDetailsState, "cardNumber" | "cardExpiration" | "zipCode" | "license">,
+  ) => {
+    const validation = validateStoredPaymentDetails(profile);
+    const validationFieldErrors = mergeFieldErrors(validation.missingFields, validation.invalidFields);
+
+    setFieldErrors((current) => {
+      const next = { ...current };
+      delete next.cardNumber;
+      delete next.cardExpiration;
+      delete next.zipCode;
+      delete next.license;
+      return {
+        ...next,
+        ...validationFieldErrors,
+      };
+    });
+
+    if (!validation.isValid) {
+      const message = staleStoredDetailsMessage(validation);
+      if (message) {
+        setErrorMessage((current) => current ?? message);
+      }
+    }
+  };
 
   useEffect(() => {
     const parsed = parsePendingPaymentRequestFromLocation();
@@ -168,6 +263,15 @@ export function PaymentConfirmForm() {
         }));
       }
 
+      if (stored) {
+        applyStoredProfileValidation({
+          cardNumber: stored.cardNumber,
+          cardExpiration: stored.cardExpiration,
+          zipCode: stored.zipCode,
+          license: stored.license || licenseFromProfile,
+        });
+      }
+
       setLoadingStoredProfile(false);
     })();
   }, []);
@@ -202,6 +306,12 @@ export function PaymentConfirmForm() {
           license: stored.license || current.license,
           cardCCV: "",
         }));
+        applyStoredProfileValidation({
+          cardNumber: stored.cardNumber,
+          cardExpiration: stored.cardExpiration,
+          zipCode: stored.zipCode,
+          license: stored.license,
+        });
       }
     } catch (error) {
       setUnlockError(error instanceof Error ? error.message : "Unable to unlock saved payment details.");
@@ -277,6 +387,15 @@ export function PaymentConfirmForm() {
       ...current,
       [field]: value,
     }));
+    setFieldErrors((current) => {
+      if (!current[field]) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
+    setErrorMessage(null);
   };
 
   const onSubmitPayment = async (event: FormEvent<HTMLFormElement>) => {
@@ -286,22 +405,18 @@ export function PaymentConfirmForm() {
       return;
     }
 
-    const cardNumber = details.cardNumber.trim();
-    const cardCCV = details.cardCCV.trim();
-    const cardExpiration = details.cardExpiration.trim();
-    const zipCode = details.zipCode.trim();
-    const license = details.license.trim();
+    const validation = validatePaymentDetails(details);
+    if (!validation.isValid) {
+      const nextFieldErrors = mergeFieldErrors(validation.missingFields, validation.invalidFields);
+      setFieldErrors(nextFieldErrors);
+      setErrorMessage(firstFieldErrorMessage(nextFieldErrors) || "Update the highlighted payment fields.");
+      return;
+    }
 
-    if (!cardNumber || !cardExpiration || !zipCode || !license) {
-      setErrorMessage("Card number, expiration, ZIP code, and plate are required.");
-      return;
-    }
-    if (!cardCCV) {
-      setErrorMessage("CCV is required for every payment and is never saved.");
-      return;
-    }
+    const { cardNumber, cardCCV, cardExpiration, zipCode, license } = validation.normalized;
 
     setSubmitting(true);
+    setFieldErrors({});
     setErrorMessage(null);
     setSuccessMessage(null);
 
@@ -350,6 +465,9 @@ export function PaymentConfirmForm() {
 
       if (!response.ok) {
         const payload = (await response.json().catch(() => ({}))) as PaymentExecuteError;
+        if (isPaymentValidationCode(payload.code) || payload.missingFields || payload.invalidFields) {
+          setFieldErrors(mergeFieldErrors(payload.missingFields || [], payload.invalidFields || []));
+        }
         throw new Error(payload.error || "Failed to execute payment.");
       }
 
@@ -443,49 +561,66 @@ export function PaymentConfirmForm() {
             <input
               value={details.cardNumber}
               onChange={onInputChange("cardNumber")}
-              className="mt-1 w-full rounded-md border border-black/15 px-3 py-2 text-sm"
+              className={`mt-1 w-full rounded-md border px-3 py-2 text-sm ${
+                fieldErrors.cardNumber ? "border-red-400" : "border-black/15"
+              }`}
               placeholder="4111111111111111"
               autoComplete="cc-number"
             />
+            {fieldErrors.cardNumber ? <p className="mt-1 text-xs text-red-700">{fieldErrors.cardNumber}</p> : null}
           </label>
           <label className="text-sm text-black/80">
             Expiration (MM/YY)
             <input
               value={details.cardExpiration}
               onChange={onInputChange("cardExpiration")}
-              className="mt-1 w-full rounded-md border border-black/15 px-3 py-2 text-sm"
+              className={`mt-1 w-full rounded-md border px-3 py-2 text-sm ${
+                fieldErrors.cardExpiration ? "border-red-400" : "border-black/15"
+              }`}
               placeholder="08/28"
               autoComplete="cc-exp"
             />
+            {fieldErrors.cardExpiration ? (
+              <p className="mt-1 text-xs text-red-700">{fieldErrors.cardExpiration}</p>
+            ) : null}
           </label>
           <label className="text-sm text-black/80">
             CCV (required every payment)
             <input
               value={details.cardCCV}
               onChange={onInputChange("cardCCV")}
-              className="mt-1 w-full rounded-md border border-black/15 px-3 py-2 text-sm"
+              className={`mt-1 w-full rounded-md border px-3 py-2 text-sm ${
+                fieldErrors.cardCCV ? "border-red-400" : "border-black/15"
+              }`}
               placeholder="123"
               autoComplete="cc-csc"
             />
+            {fieldErrors.cardCCV ? <p className="mt-1 text-xs text-red-700">{fieldErrors.cardCCV}</p> : null}
           </label>
           <label className="text-sm text-black/80">
             ZIP Code
             <input
               value={details.zipCode}
               onChange={onInputChange("zipCode")}
-              className="mt-1 w-full rounded-md border border-black/15 px-3 py-2 text-sm"
+              className={`mt-1 w-full rounded-md border px-3 py-2 text-sm ${
+                fieldErrors.zipCode ? "border-red-400" : "border-black/15"
+              }`}
               placeholder="93401"
               autoComplete="postal-code"
             />
+            {fieldErrors.zipCode ? <p className="mt-1 text-xs text-red-700">{fieldErrors.zipCode}</p> : null}
           </label>
           <label className="text-sm text-black/80 md:col-span-2">
             License Plate
             <input
               value={details.license}
               onChange={onInputChange("license")}
-              className="mt-1 w-full rounded-md border border-black/15 px-3 py-2 text-sm"
+              className={`mt-1 w-full rounded-md border px-3 py-2 text-sm ${
+                fieldErrors.license ? "border-red-400" : "border-black/15"
+              }`}
               placeholder="8ABC123"
             />
+            {fieldErrors.license ? <p className="mt-1 text-xs text-red-700">{fieldErrors.license}</p> : null}
           </label>
         </div>
 

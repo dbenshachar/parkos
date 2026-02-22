@@ -10,6 +10,10 @@ import {
   updateParkingSession,
 } from "@/lib/parking-agent/db";
 import type { ParkingNotificationType } from "@/lib/parking-agent/types";
+import {
+  buildPaymentDetailsValidationError,
+  validatePaymentDetails,
+} from "@/lib/payment-details-validation";
 import { ensureTrustedOrigin } from "@/lib/security/origin";
 
 export const runtime = "nodejs";
@@ -86,61 +90,6 @@ function computeReminderAt(now: Date, expiresAt: Date, durationMinutes: number):
   return new Date(reminderMillis).toISOString();
 }
 
-function normalizeDigits(value: string): string {
-  return value.replace(/\D+/g, "");
-}
-
-function isLuhnValid(cardNumberDigits: string): boolean {
-  let sum = 0;
-  let doubleDigit = false;
-  for (let i = cardNumberDigits.length - 1; i >= 0; i -= 1) {
-    let digit = Number(cardNumberDigits[i]);
-    if (doubleDigit) {
-      digit *= 2;
-      if (digit > 9) {
-        digit -= 9;
-      }
-    }
-    sum += digit;
-    doubleDigit = !doubleDigit;
-  }
-  return sum % 10 === 0;
-}
-
-function normalizeExpiration(value: string): string {
-  const trimmed = value.trim();
-  const match = trimmed.match(/^(\d{2})\s*\/\s*(\d{2})$/) || trimmed.match(/^(\d{2})(\d{2})$/);
-  if (!match) {
-    return "";
-  }
-  const month = Number(match[1]);
-  const year = Number(match[2]);
-  if (month < 1 || month > 12) {
-    return "";
-  }
-  const expiry = new Date(2000 + year, month, 0, 23, 59, 59, 999);
-  if (Number.isNaN(expiry.getTime()) || expiry.getTime() < Date.now()) {
-    return "";
-  }
-  return `${String(month).padStart(2, "0")}/${String(year).padStart(2, "0")}`;
-}
-
-function normalizeZipCode(value: string): string {
-  const normalized = value.trim().toUpperCase();
-  if (!/^[A-Z0-9 -]{3,10}$/.test(normalized)) {
-    return "";
-  }
-  return normalized;
-}
-
-function normalizeLicense(value: string): string {
-  const normalized = value.trim().toUpperCase();
-  if (!/^[A-Z0-9 -]{2,12}$/.test(normalized)) {
-    return "";
-  }
-  return normalized;
-}
-
 async function executePayment(input: ExecutePaymentInput): Promise<{ paymentStatus: "confirmed" }> {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
@@ -214,32 +163,21 @@ export async function POST(request: NextRequest) {
     return jsonNoStore({ error: "Cannot execute payment for a cancelled session." }, 400);
   }
 
-  const cardNumber = typeof paymentDetails?.cardNumber === "string" ? normalizeDigits(paymentDetails.cardNumber) : "";
-  const cardCCV = typeof paymentDetails?.cardCCV === "string" ? normalizeDigits(paymentDetails.cardCCV) : "";
-  const cardExpiration =
-    typeof paymentDetails?.cardExpiration === "string" ? normalizeExpiration(paymentDetails.cardExpiration) : "";
-  const zipCode = typeof paymentDetails?.zipCode === "string" ? normalizeZipCode(paymentDetails.zipCode) : "";
-  const licenseFromBody = typeof paymentDetails?.license === "string" ? paymentDetails.license.trim() : "";
-  const licenseFromProfile = auth.value.profile.license_plate?.trim().toUpperCase() || "";
-  const license = normalizeLicense(licenseFromBody || licenseFromProfile);
+  const validatedPaymentDetails = validatePaymentDetails(paymentDetails, {
+    licenseFallback: auth.value.profile.license_plate || "",
+  });
   const email = auth.value.profile.email?.trim() || "";
   const userName = auth.value.profile.username;
 
-  if (!cardNumber || !cardCCV || !cardExpiration || !zipCode || !license) {
-    return jsonNoStore(
-      {
-        error:
-          "Missing payment details. Required: paymentDetails.cardNumber, paymentDetails.cardCCV, paymentDetails.cardExpiration, paymentDetails.zipCode, paymentDetails.license.",
-      },
-      400,
-    );
+  const validationError = buildPaymentDetailsValidationError(
+    validatedPaymentDetails.missingFields,
+    validatedPaymentDetails.invalidFields,
+  );
+  if (validationError) {
+    return jsonNoStore(validationError, 400);
   }
-  if (cardNumber.length < 12 || cardNumber.length > 19 || !isLuhnValid(cardNumber)) {
-    return jsonNoStore({ error: "Invalid card number." }, 400);
-  }
-  if (!/^\d{3,4}$/.test(cardCCV)) {
-    return jsonNoStore({ error: "Invalid CCV." }, 400);
-  }
+
+  const { cardNumber, cardCCV, cardExpiration, zipCode, license } = validatedPaymentDetails.normalized;
 
   if (!email || !userName) {
     return jsonNoStore(
