@@ -37,20 +37,88 @@ type DestinationLookupResponse = {
   warnings: string[];
 };
 
-type DestinationLookupError = {
-  error?: string;
+type TripAgentClarificationOption = {
+  label: string;
+  value: string;
 };
 
-type TripParseResponse = {
-  destination: string;
-  arrivalTimeIso: string | null;
-  arrivalTimeLabel: string | null;
-  timezone: "America/Los_Angeles";
+type TripAgentClarification = {
+  target: "destination" | "arrival_time" | "destination_refinement";
+  question: string;
+  options: TripAgentClarificationOption[];
+};
+
+type TripAgentReasoning = {
   confidence: "high" | "medium" | "low";
+  confidenceScore: number;
   warnings: string[];
+  factors: string[];
+  steps: Array<{
+    name: string;
+    outcome: "ok" | "fallback" | "clarify";
+    detail: string;
+  }>;
+  candidateDiagnostics: {
+    query: string;
+    topTwoScoreGap: number | null;
+    selectedPlaceId: string | null;
+    rankedCandidates: Array<{
+      destination: string;
+      formattedAddress: string;
+      placeId: string | null;
+      score: number;
+      reasons: string[];
+    }>;
+  };
+  parkingPointRationale: Array<{
+    category: "paid" | "residential";
+    zoneNumber: string;
+    distanceMeters: number;
+    rationale: string;
+  }>;
 };
 
-type TripParseError = {
+type TripAgentReadyResponse = {
+  status: "ready";
+  runId: string;
+  trip: {
+    destination: string;
+    arrivalTimeIso: string | null;
+    arrivalTimeLabel: string | null;
+    timezone: "America/Los_Angeles";
+  };
+  destination: {
+    name: string;
+    street: string;
+    formattedAddress: string;
+    lat: number;
+    lng: number;
+    placeId: string | null;
+  };
+  recommendations: {
+    nearestParkingDistanceMeters: number;
+    paid: ParkingRecommendation[];
+    residential: ResidentialRecommendation[];
+  };
+  reasoning: TripAgentReasoning;
+};
+
+type TripAgentNeedsClarificationResponse = {
+  status: "needs_clarification";
+  runId: string;
+  clarification: TripAgentClarification;
+  partialTrip: {
+    destination: string;
+    arrivalTimeIso: string | null;
+    arrivalTimeLabel: string | null;
+    timezone: "America/Los_Angeles";
+  };
+  reasoning: TripAgentReasoning;
+};
+
+type TripAgentResponse = TripAgentReadyResponse | TripAgentNeedsClarificationResponse;
+
+type TripAgentError = {
   error?: string;
 };
 
@@ -197,6 +265,10 @@ function formatCoordinate(value: number): string {
   return value.toFixed(6);
 }
 
+function formatStepName(name: string): string {
+  return name.replace(/_/g, " ");
+}
+
 function toLiveCoordinates(position: GeolocationPosition): LiveCoordinates {
   return {
     lat: position.coords.latitude,
@@ -212,10 +284,16 @@ export function ZoneLookupForm() {
   const [arrivalTimeIso, setArrivalTimeIso] = useState<string | null>(null);
   const [arrivalTimeLabel, setArrivalTimeLabel] = useState("");
   const [tripWarnings, setTripWarnings] = useState<string[]>([]);
+  const [tripReasoning, setTripReasoning] = useState<TripAgentReasoning | null>(null);
+  const [tripClarification, setTripClarification] = useState<TripAgentClarification | null>(null);
+  const [tripClarificationAnswer, setTripClarificationAnswer] = useState("");
+  const [tripRunId, setTripRunId] = useState<string | null>(null);
+  const [tripConfidence, setTripConfidence] = useState<{
+    label: "high" | "medium" | "low";
+    score: number;
+  } | null>(null);
 
   const [destination, setDestination] = useState("");
-  const [destinationLoading, setDestinationLoading] = useState(false);
-  const [destinationError, setDestinationError] = useState<string | null>(null);
   const [destinationResult, setDestinationResult] = useState<DestinationLookupResponse | null>(null);
   const [isMapOpen, setIsMapOpen] = useState(false);
 
@@ -569,48 +647,8 @@ export function ZoneLookupForm() {
     setIsTrackingLiveLocation(true);
   };
 
-  const lookupDestination = async (destinationInput: string) => {
-    const trimmed = destinationInput.trim();
-    if (!trimmed) {
-      setDestinationError("Enter a destination such as a restaurant or business in downtown SLO.");
-      return;
-    }
-
-    setDestinationLoading(true);
-    setDestinationError(null);
-    setDestinationResult(null);
-
-    try {
-      const response = await fetch("/api/parking/recommend", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          destination: trimmed,
-          limit: 5,
-        }),
-      });
-
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => ({}))) as DestinationLookupError;
-        throw new Error(payload.error ?? "Failed to fetch parking recommendations.");
-      }
-
-      const payload = (await response.json()) as DestinationLookupResponse;
-      setDestinationResult(payload);
-      setIsMapOpen(false);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to fetch parking recommendations.";
-      setDestinationError(message);
-    } finally {
-      setDestinationLoading(false);
-    }
-  };
-
-  const onAnalyzeTripPrompt = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const trimmedPrompt = tripPrompt.trim();
+  const runTripAgent = async (promptInput: string) => {
+    const trimmedPrompt = promptInput.trim();
     if (!trimmedPrompt) {
       setTripParseError("Enter a trip prompt with your destination and optional arrival time.");
       return;
@@ -619,47 +657,126 @@ export function ZoneLookupForm() {
     setTripParseLoading(true);
     setTripParseError(null);
     setTripWarnings([]);
+    setTripClarification(null);
+    setTripClarificationAnswer("");
+    setTripRunId(null);
+    setTripConfidence(null);
+    setTripReasoning(null);
+    setDestinationResult(null);
 
     try {
-      const response = await fetch("/api/parking/parse-trip", {
+      const response = await fetch("/api/parking/agent-plan", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
           prompt: trimmedPrompt,
+          limit: 5,
         }),
       });
 
       if (!response.ok) {
-        const payload = (await response.json().catch(() => ({}))) as TripParseError;
-        throw new Error(payload.error ?? "Failed to parse trip prompt.");
+        const payload = (await response.json().catch(() => ({}))) as TripAgentError;
+        throw new Error(payload.error ?? "Failed to run trip agent.");
       }
 
-      const payload = (await response.json()) as TripParseResponse;
-      const parsedDestination = payload.destination.trim();
+      const payload = (await response.json()) as TripAgentResponse;
+      const normalizedReasoning: TripAgentReasoning = {
+        confidence: payload.reasoning.confidence,
+        confidenceScore: payload.reasoning.confidenceScore,
+        warnings: payload.reasoning.warnings ?? [],
+        factors: payload.reasoning.factors ?? [],
+        steps: payload.reasoning.steps ?? [],
+        candidateDiagnostics: payload.reasoning.candidateDiagnostics ?? {
+          query: "",
+          topTwoScoreGap: null,
+          selectedPlaceId: null,
+          rankedCandidates: [],
+        },
+        parkingPointRationale: payload.reasoning.parkingPointRationale ?? [],
+      };
+      setTripRunId(payload.runId);
+      setTripConfidence({
+        label: normalizedReasoning.confidence,
+        score: normalizedReasoning.confidenceScore,
+      });
+      setTripWarnings(normalizedReasoning.warnings);
+      setTripReasoning(normalizedReasoning);
 
-      if (!parsedDestination) {
-        throw new Error("Trip parser returned an empty destination.");
+      if (payload.status === "ready") {
+        const resolvedDestination = payload.trip.destination.trim();
+        if (!resolvedDestination) {
+          throw new Error("Trip agent returned an empty destination.");
+        }
+
+        setDestination(resolvedDestination);
+        setArrivalTimeIso(payload.trip.arrivalTimeIso);
+        setArrivalTimeLabel(payload.trip.arrivalTimeLabel ?? "");
+        setDestinationResult({
+          destination: payload.destination.name,
+          street: payload.destination.street,
+          destinationLat: payload.destination.lat,
+          destinationLng: payload.destination.lng,
+          nearestParkingDistanceMeters: payload.recommendations.nearestParkingDistanceMeters,
+          recommendations: payload.recommendations.paid,
+          residentialRecommendations: payload.recommendations.residential,
+          warnings: normalizedReasoning.warnings,
+        });
+        setIsMapOpen(false);
+        return;
       }
 
-      setDestination(parsedDestination);
-      setArrivalTimeIso(payload.arrivalTimeIso);
-      setArrivalTimeLabel(payload.arrivalTimeLabel ?? "");
-      setTripWarnings(payload.warnings ?? []);
-
-      await lookupDestination(parsedDestination);
+      setDestination(payload.partialTrip.destination);
+      setArrivalTimeIso(payload.partialTrip.arrivalTimeIso);
+      setArrivalTimeLabel(payload.partialTrip.arrivalTimeLabel ?? "");
+      setTripClarification(payload.clarification);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to parse trip prompt.";
+      const message = error instanceof Error ? error.message : "Failed to run trip agent.";
       setTripParseError(message);
     } finally {
       setTripParseLoading(false);
     }
   };
 
-  const onDestinationLookup = async (event: React.FormEvent<HTMLFormElement>) => {
+  const onAnalyzeTripPrompt = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    await lookupDestination(destination);
+    await runTripAgent(tripPrompt);
+  };
+
+  const onSubmitClarification = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!tripClarification) {
+      return;
+    }
+
+    const answer = tripClarificationAnswer.trim();
+    if (!answer) {
+      setTripParseError("Enter a clarification response to continue.");
+      return;
+    }
+
+    const nextPrompt =
+      tripClarification.target === "arrival_time" && destination
+        ? `${destination} ${answer}`
+        : answer;
+
+    setTripPrompt(nextPrompt);
+    await runTripAgent(nextPrompt);
+  };
+
+  const onChooseClarificationOption = async (value: string) => {
+    const optionValue = value.trim();
+    const nextPrompt =
+      tripClarification?.target === "destination" && arrivalTimeLabel
+        ? `${optionValue} arriving ${arrivalTimeLabel}`
+        : optionValue;
+    if (!nextPrompt) {
+      return;
+    }
+    setTripPrompt(nextPrompt);
+    setTripClarificationAnswer("");
+    await runTripAgent(nextPrompt);
   };
 
   const onTestLocation = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -803,10 +920,10 @@ export function ZoneLookupForm() {
   return (
     <section className="w-full max-w-4xl space-y-5">
       <article className="rounded-2xl border border-black/10 bg-white p-6 shadow-sm">
-        <h2 className="text-xl font-semibold text-black">Trip Assistant</h2>
+        <h2 className="text-xl font-semibold text-black">Trip Agent</h2>
         <p className="mt-2 text-sm text-black/70">
-          Describe your trip in plain language. ParkOS will extract your destination and intended arrival time, then
-          auto-run parking recommendations.
+          Describe your trip in plain language. ParkOS will parse destination and arrival time, resolve Google Places
+          candidates, cross-reference downtown zone geojson, and either return recommendations or ask one clarification.
         </p>
 
         <form onSubmit={onAnalyzeTripPrompt} className="mt-5 space-y-3">
@@ -816,7 +933,7 @@ export function ZoneLookupForm() {
               value={tripPrompt}
               onChange={(event) => setTripPrompt(event.target.value)}
               className="mt-1 min-h-24 w-full rounded-md border border-black/15 px-3 py-2 text-sm"
-              placeholder="e.g. Dinner at Firestone Grill tomorrow at 7pm."
+              placeholder="e.g. Going to Luna Red today @ 8pm"
             />
           </label>
           <button
@@ -824,70 +941,151 @@ export function ZoneLookupForm() {
             disabled={tripParseLoading}
             className="rounded-md bg-black px-4 py-2 text-sm font-medium text-white hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-70"
           >
-            {tripParseLoading ? "Analyzing..." : "Analyze Trip"}
+            {tripParseLoading ? "Planning..." : "Plan Parking"}
           </button>
+          <p className="text-xs text-black/60">
+            Arrival time is captured now for context and does not affect ranking yet. Ranking stays distance-first.
+          </p>
         </form>
 
         {tripParseError ? <p className="mt-3 text-sm text-red-700">{tripParseError}</p> : null}
 
-        {(destination || arrivalTimeLabel || tripWarnings.length > 0) ? (
+        {(destination || arrivalTimeLabel || tripWarnings.length > 0 || tripConfidence || tripRunId) ? (
           <div className="mt-4 rounded-lg border border-black/10 bg-black/[0.02] p-4 text-sm text-black">
             <p>
               Parsed destination: <strong>{destination || "Not found"}</strong>
             </p>
             <p>Parsed arrival time: {arrivalTimeLabel || "Not specified"}</p>
             {arrivalTimeIso ? <p className="text-xs text-black/70">Normalized ISO: {arrivalTimeIso}</p> : null}
+            {tripConfidence ? (
+              <p className="text-xs text-black/70">
+                Confidence: {tripConfidence.label} ({tripConfidence.score.toFixed(2)})
+              </p>
+            ) : null}
+            {tripRunId ? <p className="text-xs text-black/60">Run ID: {tripRunId}</p> : null}
             {tripWarnings.length > 0 ? (
               <p className="mt-2 text-xs text-amber-700">{tripWarnings.join(" ")}</p>
             ) : null}
           </div>
         ) : null}
-      </article>
 
-      <article className="rounded-2xl border border-black/10 bg-white p-6 shadow-sm">
-        <h2 className="text-xl font-semibold text-black">Destination Lookup (Google Maps)</h2>
-        <p className="mt-2 text-sm text-black/70">
-          Enter your intended destination. The app will resolve it with Google Places, enforce
-          downtown-only matching, and print the top 5 closest parking suggestions.
-        </p>
+        {tripReasoning ? (
+          <div className="mt-4 rounded-lg border border-black/10 bg-white p-4 text-sm text-black">
+            <p className="font-semibold">Why this recommendation?</p>
+            <p className="mt-1 text-xs text-black/70">
+              Strategy: distance-first ranking with destination confidence checks and downtown proximity validation.
+            </p>
+            {tripReasoning.factors.length > 0 ? (
+              <p className="mt-2 text-xs text-black/70">Score factors: {tripReasoning.factors.join(" | ")}</p>
+            ) : null}
 
-        <form onSubmit={onDestinationLookup} className="mt-5 space-y-3">
-          <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto] md:items-end">
-            <label className="text-sm text-black/80">
-              Destination
-              <input
-                value={destination}
-                onChange={(event) => setDestination(event.target.value)}
-                className="mt-1 w-full rounded-md border border-black/15 px-3 py-2 text-sm"
-                placeholder="e.g. Firestone Grill San Luis Obispo"
-              />
-            </label>
-            <label className="text-sm text-black/80">
-              Intended Arrival Time (Optional)
-              <input
-                value={arrivalTimeLabel}
-                onChange={(event) => {
-                  setArrivalTimeLabel(event.target.value);
-                  setArrivalTimeIso(null);
-                }}
-                className="mt-1 w-full rounded-md border border-black/15 px-3 py-2 text-sm"
-                placeholder="e.g. Wed, Feb 21, 7:00 PM PST"
-              />
-            </label>
-            <button
-              type="submit"
-              disabled={destinationLoading}
-              className="rounded-md bg-black px-4 py-2 text-sm font-medium text-white hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-70"
-            >
-              {destinationLoading ? "Looking up..." : "Find Parking Zones"}
-            </button>
+            <div className="mt-3">
+              <p className="text-xs font-medium uppercase tracking-wide text-black/70">Decision Steps</p>
+              <ol className="mt-1 space-y-2">
+                {tripReasoning.steps.map((step, index) => (
+                  <li key={`${step.name}-${index}`} className="rounded border border-black/10 bg-black/[0.02] p-2">
+                    <p className="text-xs font-semibold text-black">
+                      {index + 1}. {formatStepName(step.name)} ({step.outcome})
+                    </p>
+                    <p className="text-xs text-black/80">{step.detail}</p>
+                  </li>
+                ))}
+              </ol>
+            </div>
+
+            <div className="mt-3">
+              <p className="text-xs font-medium uppercase tracking-wide text-black/70">Candidate Scores</p>
+              <p className="mt-1 text-xs text-black/70">
+                Query: <span className="font-mono">{tripReasoning.candidateDiagnostics.query || "n/a"}</span>
+                {tripReasoning.candidateDiagnostics.topTwoScoreGap !== null
+                  ? ` | top gap: ${tripReasoning.candidateDiagnostics.topTwoScoreGap.toFixed(3)}`
+                  : ""}
+              </p>
+              {tripReasoning.candidateDiagnostics.rankedCandidates.length > 0 ? (
+                <div className="mt-2 space-y-2">
+                  {tripReasoning.candidateDiagnostics.rankedCandidates.map((candidate) => (
+                    <div
+                      key={`${candidate.placeId ?? candidate.formattedAddress}-${candidate.score}`}
+                      className="rounded border border-black/10 bg-black/[0.02] p-2"
+                    >
+                      <p className="text-xs font-semibold text-black">
+                        {candidate.destination} ({candidate.score.toFixed(3)})
+                      </p>
+                      <p className="text-xs text-black/70">{candidate.formattedAddress}</p>
+                      <p className="text-xs text-black/70">Reasoning: {candidate.reasons.join(", ")}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-1 text-xs text-black/60">No candidates available for this run.</p>
+              )}
+            </div>
+
+            <div className="mt-3">
+              <p className="text-xs font-medium uppercase tracking-wide text-black/70">Point Selection Rationale</p>
+              {tripReasoning.parkingPointRationale.length > 0 ? (
+                <div className="mt-2 space-y-2">
+                  {tripReasoning.parkingPointRationale.map((point) => (
+                    <div
+                      key={`${point.category}-${point.zoneNumber}-${point.distanceMeters}`}
+                      className="rounded border border-black/10 bg-black/[0.02] p-2"
+                    >
+                      <p className="text-xs font-semibold text-black">
+                        {point.category === "paid" ? "Paid" : "Residential"} zone {point.zoneNumber}
+                      </p>
+                      <p className="text-xs text-black/70">
+                        {Math.round(point.distanceMeters)}m away. {point.rationale}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-1 text-xs text-black/60">No parking point rationale available yet for this run.</p>
+              )}
+            </div>
           </div>
-          <p className="text-xs text-black/60">
-            Arrival time is captured for future traffic-density analysis and does not affect parking ranking yet.
-          </p>
-        </form>
+        ) : null}
 
-        {destinationError ? <p className="mt-3 text-sm text-red-700">{destinationError}</p> : null}
+        {tripClarification ? (
+          <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
+            <p className="font-semibold">Need Clarification</p>
+            <p className="mt-1">{tripClarification.question}</p>
+            {tripClarification.options.length > 0 ? (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {tripClarification.options.map((option) => (
+                  <button
+                    key={`${option.label}-${option.value}`}
+                    type="button"
+                    onClick={() => void onChooseClarificationOption(option.value)}
+                    disabled={tripParseLoading}
+                    className="rounded-md border border-amber-400 bg-white px-3 py-2 text-xs font-medium text-amber-900 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <form onSubmit={onSubmitClarification} className="mt-3 flex flex-col gap-2 sm:flex-row">
+              <input
+                value={tripClarificationAnswer}
+                onChange={(event) => setTripClarificationAnswer(event.target.value)}
+                className="w-full rounded-md border border-amber-300 px-3 py-2 text-sm text-black"
+                placeholder={
+                  tripClarification.target === "arrival_time"
+                    ? "e.g. tonight at 8pm"
+                    : "Enter destination clarification"
+                }
+              />
+              <button
+                type="submit"
+                disabled={tripParseLoading}
+                className="rounded-md bg-amber-700 px-4 py-2 text-sm font-medium text-white hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {tripParseLoading ? "Retrying..." : "Submit Clarification"}
+              </button>
+            </form>
+          </div>
+        ) : null}
 
         {destinationResult ? (
           <div className="mt-5 rounded-lg border border-black/10 bg-black/[0.02] p-4 text-sm text-black">
