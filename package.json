@@ -7,9 +7,12 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "download:parking": "node scripts/download-arcgis-layer.mjs --appid 0e63a798f5d9435f9137ce38245d63ee --output data/slo-street-parking.json --hint parking",
+    "download:downtown-rates": "node scripts/download-downtown-rates.mjs"
   },
   "dependencies": {
+    "@googlemaps/js-api-loader": "^2.0.2",
     "@tauri-apps/api": "^2.10.1",
     "next": "16.1.6",
     "playwright": "^1.58.2",
@@ -22,6 +25,7 @@
     "@playwright/test": "^1.58.2",
     "@tailwindcss/postcss": "^4",
     "@tauri-apps/cli": "^2.10.0",
+    "@types/google.maps": "^3.58.1",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
