@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 
 import { loadStoredPaymentProfile, saveStoredPaymentProfile } from "@/lib/payment-profile-storage";
@@ -37,6 +37,15 @@ type PaymentDetailsState = {
   cardExpiration: string;
   zipCode: string;
   license: string;
+};
+
+const POST_PAYMENT_INFO_DELAY_MS = 30_000;
+const SHORT_DURATION_REMINDER_DELAY_MS = 60_000;
+const RENEW_REMINDER_LEAD_MS = 10 * 60_000;
+
+type ScheduledTick = {
+  label: "payment_confirmed" | "post_payment_info" | "renew_reminder" | "parking_expired";
+  delayMs: number;
 };
 
 function parsePendingPaymentRequestFromLocation(): PendingPaymentRequest | null {
@@ -92,6 +101,7 @@ export function PaymentConfirmForm() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const tickTimerIdsRef = useRef<number[]>([]);
 
   useEffect(() => {
     const parsed = parsePendingPaymentRequestFromLocation();
@@ -134,6 +144,67 @@ export function PaymentConfirmForm() {
 
       setLoadingStoredProfile(false);
     })();
+  }, []);
+
+  const runParkingAgentTick = async () => {
+    await fetch("/api/jobs/parking-agent-tick", {
+      method: "POST",
+      headers: {
+        "x-parkos-user-trigger": "1",
+      },
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+  };
+
+  const clearScheduledTicks = () => {
+    for (const timerId of tickTimerIdsRef.current) {
+      window.clearTimeout(timerId);
+    }
+    tickTimerIdsRef.current = [];
+  };
+
+  const computeScheduledTicks = (durationMinutes: number, expiresAtIso: string): ScheduledTick[] => {
+    const nowMs = Date.now();
+    const parsedExpiryMs = Date.parse(expiresAtIso);
+    const fallbackExpiryMs = nowMs + durationMinutes * 60_000;
+    const expiresAtMs = Number.isFinite(parsedExpiryMs) ? parsedExpiryMs : fallbackExpiryMs;
+    const expiresDelayMs = Math.max(0, expiresAtMs - nowMs);
+
+    const renewDelayMs =
+      durationMinutes < 10
+        ? SHORT_DURATION_REMINDER_DELAY_MS
+        : Math.max(SHORT_DURATION_REMINDER_DELAY_MS, expiresDelayMs - RENEW_REMINDER_LEAD_MS);
+
+    return [
+      { label: "payment_confirmed", delayMs: 0 },
+      { label: "post_payment_info", delayMs: POST_PAYMENT_INFO_DELAY_MS },
+      { label: "renew_reminder", delayMs: renewDelayMs },
+      { label: "parking_expired", delayMs: expiresDelayMs },
+    ];
+  };
+
+  const scheduleNotificationTicks = (durationMinutes: number, expiresAtIso: string) => {
+    clearScheduledTicks();
+    const schedule = computeScheduledTicks(durationMinutes, expiresAtIso);
+
+    for (const item of schedule) {
+      const timerId = window.setTimeout(() => {
+        void runParkingAgentTick().catch(() => {
+          // User-triggered tick is best effort; cron delivery remains authoritative.
+        });
+      }, item.delayMs);
+      tickTimerIdsRef.current.push(timerId);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      for (const timerId of tickTimerIdsRef.current) {
+        window.clearTimeout(timerId);
+      }
+      tickTimerIdsRef.current = [];
+    };
   }, []);
 
   const onInputChange = (field: keyof PaymentDetailsState) => (event: ChangeEvent<HTMLInputElement>) => {
@@ -202,6 +273,7 @@ export function PaymentConfirmForm() {
       }
 
       const payload = (await response.json()) as ExecutePaymentResponse;
+      scheduleNotificationTicks(request.durationMinutes, payload.expiresAt);
       setSuccessMessage(`Payment ${payload.paymentStatus}. Expires at ${formatTimestamp(payload.expiresAt)}.`);
       setDetails((current) => ({
         ...current,
