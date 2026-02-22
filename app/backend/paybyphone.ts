@@ -30,47 +30,6 @@ export const processPayByPhonePayment = async (
     userName,
   } = info;
 
-  await page.addInitScript(() => {
-    window.addEventListener("DOMContentLoaded", () => {
-      const coords = document.createElement("div");
-      coords.id = "mouse-coords";
-      Object.assign(coords.style, {
-        position: "fixed",
-        bottom: "20px",
-        right: "20px",
-        padding: "8px",
-        background: "rgba(0, 0, 0, 0.8)",
-        color: "#fff",
-        fontFamily: "monospace",
-        fontSize: "14px",
-        zIndex: "10000",
-        borderRadius: "4px",
-        pointerEvents: "none",
-      });
-      document.body.appendChild(coords);
-
-      const dot = document.createElement("div");
-      Object.assign(dot.style, {
-        position: "fixed",
-        width: "10px",
-        height: "10px",
-        background: "red",
-        borderRadius: "50%",
-        zIndex: "10001",
-        pointerEvents: "none",
-        transform: "translate(-50%, -50%)",
-      });
-      document.body.appendChild(dot);
-
-      window.addEventListener("mousemove", (e) => {
-        const tuple = `(${e.clientX}, ${e.clientY})`;
-        coords.textContent = tuple;
-        dot.style.left = `${e.clientX}px`;
-        dot.style.top = `${e.clientY}px`;
-      });
-    });
-  });
-
   await page.goto("https://m.paybyphone.com/", {
     waitUntil: "domcontentloaded",
   });

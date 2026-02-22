@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { NextRequest, NextResponse } from "next/server";
+import { getOrCreateRuntimeSecret } from "@/lib/runtime-secrets";
 
 export const PARKOS_AUTH_COOKIE_NAME = "parkos_session";
 const DEFAULT_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
@@ -16,15 +17,14 @@ export type AuthSessionPayload = {
 };
 
 function getSessionSecret(): string {
-  return (
-    process.env.PARKOS_SESSION_SECRET?.trim() ||
-    process.env.SUPABASE_API_KEY?.trim() ||
-    ""
-  );
+  return getOrCreateRuntimeSecret("PARKOS_SESSION_SECRET");
 }
 
-function signToken(payloadSegment: string): string {
+function signToken(payloadSegment: string): string | null {
   const secret = getSessionSecret();
+  if (!secret) {
+    return null;
+  }
   return createHmac("sha256", secret).update(payloadSegment).digest("base64url");
 }
 
@@ -52,6 +52,9 @@ function decodeSessionPayload(payloadSegment: string): SerializedSessionPayload 
 function createSessionToken(payload: SerializedSessionPayload): string {
   const encodedPayload = encodeSessionPayload(payload);
   const signature = signToken(encodedPayload);
+  if (!signature) {
+    throw new Error("Missing PARKOS_SESSION_SECRET environment variable.");
+  }
   return `${encodedPayload}.${signature}`;
 }
 
@@ -62,6 +65,9 @@ function parseSessionToken(token: string): SerializedSessionPayload | null {
   }
 
   const expectedSignature = signToken(payloadSegment);
+  if (!expectedSignature) {
+    return null;
+  }
   const providedBuffer = Buffer.from(signatureSegment, "utf8");
   const expectedBuffer = Buffer.from(expectedSignature, "utf8");
 
@@ -80,6 +86,10 @@ export function setAuthSessionCookie(
   session: AuthSessionPayload,
   expiresInSeconds?: number,
 ): void {
+  if (!getSessionSecret()) {
+    throw new Error("Missing PARKOS_SESSION_SECRET environment variable.");
+  }
+
   const parsedMaxAge = Number.isFinite(expiresInSeconds)
     ? Math.max(60, Math.trunc(expiresInSeconds as number))
     : DEFAULT_SESSION_MAX_AGE_SECONDS;

@@ -1,0 +1,17 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "identifier": "com.dbenshachar.parkos",
+  "build": {
+    "devUrl": "http://localhost:3000",
+    "frontendDist": "https://parkos.example.com",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": null
+  },
+  "bundle": {
+    "iOS": {
+      "developmentTeam": "YOUR_APPLE_TEAM_ID",
+      "minimumSystemVersion": "14.0",
+      "infoPlist": "Info.ios.plist"
+    }
+  }
+}

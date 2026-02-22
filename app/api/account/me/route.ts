@@ -12,6 +12,8 @@ import {
   parseRequiredText,
   updateProfile,
 } from "@/lib/account-store";
+import { ensureTrustedOrigin, clientIp } from "@/lib/security/origin";
+import { checkAndConsumeRateLimit } from "@/lib/security/rate-limit";
 
 type UpdateProfileRequest = {
   email?: string;
@@ -27,35 +29,53 @@ type UpdateProfileRequest = {
 
 const E164_PHONE_REGEX = /^\+[1-9][0-9]{7,14}$/;
 
+function jsonNoStore(body: unknown, status: number): NextResponse {
+  return NextResponse.json(body, {
+    status,
+    headers: {
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
 function unauthorizedResponse(message: string): NextResponse {
-  const response = NextResponse.json({ error: message }, { status: 401 });
+  const response = jsonNoStore({ error: message }, 401);
   clearAuthSessionCookie(response);
   return response;
 }
 
 export async function GET(request: NextRequest) {
+  const endpointRate = checkAndConsumeRateLimit(`account-me-get:${clientIp(request)}`, {
+    maxRequests: 120,
+    windowMs: 10 * 60_000,
+    blockMs: 5 * 60_000,
+  });
+  if (!endpointRate.allowed) {
+    return jsonNoStore({ error: "Too many profile requests. Try again later." }, 429);
+  }
+
   const session = getAuthSession(request);
   if (!session) {
-    return NextResponse.json(
+    return jsonNoStore(
       { error: "Please log in to view your profile." },
-      { status: 401 },
+      401,
     );
   }
 
   const config = getSupabaseConfig();
   if (!config) {
-    return NextResponse.json(
+    return jsonNoStore(
       {
         error:
           "Missing SUPABASE_URL or SUPABASE_API_KEY environment variables.",
       },
-      { status: 500 },
+      500,
     );
   }
 
   const profileResult = await fetchProfileById(config, session.profileId);
   if (!profileResult.ok) {
-    return NextResponse.json({ error: profileResult.error }, { status: 502 });
+    return jsonNoStore({ error: profileResult.error }, 502);
   }
 
   const profile = profileResult.value;
@@ -68,31 +88,44 @@ export async function GET(request: NextRequest) {
 
   const clientProfile = mapProfileForClient(profile);
   if (!clientProfile) {
-    return NextResponse.json(
+    return jsonNoStore(
       {
         error:
           "Saved account data is incomplete. Please recreate your account details.",
       },
-      { status: 500 },
+      500,
     );
   }
 
-  return NextResponse.json(
+  return jsonNoStore(
     {
       ok: true,
       username: clientProfile.username,
       profile: clientProfile,
     },
-    { status: 200 },
+    200,
   );
 }
 
 export async function PATCH(request: NextRequest) {
+  const originViolation = ensureTrustedOrigin(request);
+  if (originViolation) {
+    return originViolation;
+  }
+  const endpointRate = checkAndConsumeRateLimit(`account-me-patch:${clientIp(request)}`, {
+    maxRequests: 30,
+    windowMs: 10 * 60_000,
+    blockMs: 10 * 60_000,
+  });
+  if (!endpointRate.allowed) {
+    return jsonNoStore({ error: "Too many profile update attempts. Try again later." }, 429);
+  }
+
   const session = getAuthSession(request);
   if (!session) {
-    return NextResponse.json(
+    return jsonNoStore(
       { error: "Please log in to update your profile." },
-      { status: 401 },
+      401,
     );
   }
 
@@ -100,17 +133,17 @@ export async function PATCH(request: NextRequest) {
   try {
     body = (await request.json()) as UpdateProfileRequest;
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+    return jsonNoStore({ error: "Invalid JSON body." }, 400);
   }
 
   const config = getSupabaseConfig();
   if (!config) {
-    return NextResponse.json(
+    return jsonNoStore(
       {
         error:
           "Missing SUPABASE_URL or SUPABASE_API_KEY environment variables.",
       },
-      { status: 500 },
+      500,
     );
   }
 
@@ -119,10 +152,7 @@ export async function PATCH(request: NextRequest) {
     session.profileId,
   );
   if (!existingProfileResult.ok) {
-    return NextResponse.json(
-      { error: existingProfileResult.error },
-      { status: 502 },
-    );
+    return jsonNoStore({ error: existingProfileResult.error }, 502);
   }
 
   const existingProfile = existingProfileResult.value;
@@ -168,33 +198,24 @@ export async function PATCH(request: NextRequest) {
     : null;
 
   if (!email || !carMake || !carModel || !licensePlate) {
-    return NextResponse.json(
+    return jsonNoStore(
       {
         error:
           "Required fields missing: email, carMake, carModel, and licensePlate are required.",
       },
-      { status: 400 },
+      400,
     );
   }
 
   const nextPassword = body.password || "";
   if (nextPassword && nextPassword.length < 8) {
-    return NextResponse.json(
-      { error: "Password must be at least 8 characters." },
-      { status: 400 },
-    );
+    return jsonNoStore({ error: "Password must be at least 8 characters." }, 400);
   }
   if (phoneE164 && !E164_PHONE_REGEX.test(phoneE164)) {
-    return NextResponse.json(
-      { error: "Phone number must be in E.164 format (e.g. +15551234567)." },
-      { status: 400 },
-    );
+    return jsonNoStore({ error: "Phone number must be in E.164 format (e.g. +15551234567)." }, 400);
   }
   if (smsOptIn && !phoneE164) {
-    return NextResponse.json(
-      { error: "A phone number is required when SMS reminders are enabled." },
-      { status: 400 },
-    );
+    return jsonNoStore({ error: "A phone number is required when SMS reminders are enabled." }, 400);
   }
 
   const saveResult = await updateProfile(config, existingProfile.id, {
@@ -211,23 +232,20 @@ export async function PATCH(request: NextRequest) {
   });
 
   if (!saveResult.ok) {
-    return NextResponse.json({ error: saveResult.error }, { status: 502 });
+    return jsonNoStore({ error: saveResult.error }, 502);
   }
 
   const savedProfile = mapProfileForClient(saveResult.value);
   if (!savedProfile) {
-    return NextResponse.json(
-      { error: "Saved account data is incomplete." },
-      { status: 500 },
-    );
+    return jsonNoStore({ error: "Saved account data is incomplete." }, 500);
   }
 
-  return NextResponse.json(
+  return jsonNoStore(
     {
       ok: true,
       username: savedProfile.username,
       profile: savedProfile,
     },
-    { status: 200 },
+    200,
   );
 }

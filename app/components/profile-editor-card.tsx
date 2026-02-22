@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { clearPaymentProfileSessionUnlock } from "@/lib/payment-profile-storage";
 
 type SavedProfile = {
   id?: string;
@@ -196,6 +197,7 @@ export function ProfileEditorCard() {
       try {
         await fetch("/api/account/logout", { method: "POST" });
       } finally {
+        clearPaymentProfileSessionUnlock();
         router.push("/");
       }
     })();

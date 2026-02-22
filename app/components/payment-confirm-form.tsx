@@ -4,7 +4,11 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 
-import { loadStoredPaymentProfile, saveStoredPaymentProfile } from "@/lib/payment-profile-storage";
+import {
+  PaymentProfileUnlockRequiredError,
+  loadStoredPaymentProfile,
+  saveStoredPaymentProfile,
+} from "@/lib/payment-profile-storage";
 
 type PendingPaymentRequest = {
   sessionId: string;
@@ -25,7 +29,9 @@ type ExecutePaymentResponse = {
 
 type MeResponse = {
   ok?: boolean;
+  username?: string;
   profile?: {
+    username?: string;
     licensePlate?: string;
   } | null;
   error?: string;
@@ -101,6 +107,11 @@ export function PaymentConfirmForm() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [unlockRequired, setUnlockRequired] = useState(false);
+  const [unlocking, setUnlocking] = useState(false);
+  const [unlockPassword, setUnlockPassword] = useState("");
+  const [unlockError, setUnlockError] = useState<string | null>(null);
+  const [accountUsername, setAccountUsername] = useState("");
   const tickTimerIdsRef = useRef<number[]>([]);
 
   useEffect(() => {
@@ -109,15 +120,8 @@ export function PaymentConfirmForm() {
     setLoadingRequest(false);
 
     void (async () => {
-      let stored = null as Awaited<ReturnType<typeof loadStoredPaymentProfile>>;
-      try {
-        stored = await loadStoredPaymentProfile();
-        setHasStoredProfile(Boolean(stored));
-      } catch {
-        setHasStoredProfile(false);
-      }
-
       let licenseFromProfile = "";
+      let username = "";
       try {
         const response = await fetch("/api/account/me", {
           method: "GET",
@@ -126,9 +130,31 @@ export function PaymentConfirmForm() {
         if (response.ok) {
           const payload = (await response.json().catch(() => ({}))) as MeResponse;
           licenseFromProfile = payload.profile?.licensePlate?.trim() || "";
+          username = (payload.profile?.username || payload.username || "").trim().toLowerCase();
         }
       } catch {
         licenseFromProfile = "";
+        username = "";
+      }
+
+      setAccountUsername(username);
+
+      let stored = null as Awaited<ReturnType<typeof loadStoredPaymentProfile>>;
+      try {
+        stored = await loadStoredPaymentProfile({
+          username,
+        });
+        setHasStoredProfile(Boolean(stored));
+        setUnlockRequired(false);
+      } catch (error) {
+        if (error instanceof PaymentProfileUnlockRequiredError) {
+          setHasStoredProfile(true);
+          setUnlockRequired(true);
+          setUnlockError(null);
+        } else {
+          setHasStoredProfile(false);
+          setUnlockRequired(false);
+        }
       }
 
       if (stored || licenseFromProfile) {
@@ -145,6 +171,44 @@ export function PaymentConfirmForm() {
       setLoadingStoredProfile(false);
     })();
   }, []);
+
+  const onUnlockStoredProfile = async () => {
+    if (!accountUsername) {
+      setUnlockError("Unable to determine your account username. Refresh and try again.");
+      return;
+    }
+    if (!unlockPassword.trim()) {
+      setUnlockError("Enter your account password to unlock saved details.");
+      return;
+    }
+
+    setUnlocking(true);
+    setUnlockError(null);
+    try {
+      const stored = await loadStoredPaymentProfile({
+        username: accountUsername,
+        password: unlockPassword,
+      });
+
+      setHasStoredProfile(Boolean(stored));
+      setUnlockRequired(false);
+      setUnlockPassword("");
+      if (stored) {
+        setDetails((current) => ({
+          ...current,
+          cardNumber: stored.cardNumber,
+          cardExpiration: stored.cardExpiration,
+          zipCode: stored.zipCode,
+          license: stored.license || current.license,
+          cardCCV: "",
+        }));
+      }
+    } catch (error) {
+      setUnlockError(error instanceof Error ? error.message : "Unable to unlock saved payment details.");
+    } finally {
+      setUnlocking(false);
+    }
+  };
 
   const runParkingAgentTick = async () => {
     await fetch("/api/jobs/parking-agent-tick", {
@@ -242,28 +306,45 @@ export function PaymentConfirmForm() {
     setSuccessMessage(null);
 
     try {
-      await saveStoredPaymentProfile({
-        cardNumber,
-        cardExpiration,
-        zipCode,
-        license,
-      });
+      let localSaveWarning: string | null = null;
+      try {
+        await saveStoredPaymentProfile(
+          {
+            cardNumber,
+            cardExpiration,
+            zipCode,
+            license,
+          },
+          {
+            username: accountUsername,
+          },
+        );
+      } catch (storageError) {
+        if (storageError instanceof PaymentProfileUnlockRequiredError) {
+          setUnlockRequired(true);
+          localSaveWarning = "Payment details were not saved locally. Unlock saved details to restore autofill.";
+        } else {
+          localSaveWarning = "Payment details could not be saved locally on this device.";
+        }
+      }
 
       const response = await fetch("/api/parking/payment/execute", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-card-number": cardNumber,
-          "x-card-ccv": cardCCV,
-          "x-card-expiration": cardExpiration,
-          "x-zip-code": zipCode,
-          "x-license": license,
         },
         body: JSON.stringify({
           sessionId: request.sessionId,
           zoneNumber: request.zoneNumber,
           durationMinutes: request.durationMinutes,
           renewFromSessionId: request.renewFromSessionId,
+          paymentDetails: {
+            cardNumber,
+            cardCCV,
+            cardExpiration,
+            zipCode,
+            license,
+          },
         }),
       });
 
@@ -280,6 +361,9 @@ export function PaymentConfirmForm() {
         cardCCV: "",
       }));
       setHasStoredProfile(true);
+      if (localSaveWarning) {
+        setErrorMessage(localSaveWarning);
+      }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Payment failed.");
     } finally {
@@ -311,7 +395,11 @@ export function PaymentConfirmForm() {
         <p>Duration: {request.durationMinutes} minutes</p>
         {!loadingStoredProfile ? (
           hasStoredProfile ? (
-            <p className="mt-2 text-black/70">Saved card details found on this device. Enter CCV to continue.</p>
+            unlockRequired ? (
+              <p className="mt-2 text-amber-800">Saved details are encrypted. Unlock with your password to autofill.</p>
+            ) : (
+              <p className="mt-2 text-black/70">Saved card details found on this device. Enter CCV to continue.</p>
+            )
           ) : (
             <p className="mt-2 text-black/70">No saved card details found. Enter details below to continue.</p>
           )
@@ -319,6 +407,34 @@ export function PaymentConfirmForm() {
           <p className="mt-2 text-black/70">Checking for saved card details...</p>
         )}
       </div>
+
+      {unlockRequired ? (
+        <section className="rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+          <p className="font-medium">Unlock saved payment details</p>
+          <p className="mt-1 text-amber-800">Enter your account password once for this session to decrypt saved details.</p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <input
+              type="password"
+              value={unlockPassword}
+              onChange={(event) => setUnlockPassword(event.target.value)}
+              className="w-full max-w-sm rounded-md border border-amber-400/70 px-3 py-2 text-sm text-black"
+              placeholder="Account password"
+              autoComplete="current-password"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                void onUnlockStoredProfile();
+              }}
+              disabled={unlocking}
+              className="rounded-md bg-black px-4 py-2 text-sm font-medium text-white hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              {unlocking ? "Unlocking..." : "Unlock"}
+            </button>
+          </div>
+          {unlockError ? <p className="mt-2 text-red-700">{unlockError}</p> : null}
+        </section>
+      ) : null}
 
       <form onSubmit={onSubmitPayment} className="rounded-md border border-black/10 bg-white p-4">
         <div className="grid gap-3 md:grid-cols-2">
@@ -392,7 +508,9 @@ export function PaymentConfirmForm() {
 
       {errorMessage ? <p className="text-sm text-red-700">{errorMessage}</p> : null}
       {successMessage ? <p className="text-sm text-emerald-700">{successMessage}</p> : null}
-      <p className="text-xs text-black/60">Card number, expiration, ZIP code, and plate are saved locally on-device. CCV is never saved.</p>
+      <p className="text-xs text-black/60">
+        Saved card details on this device are encrypted at rest. CCV is never saved.
+      </p>
     </div>
   );
 }

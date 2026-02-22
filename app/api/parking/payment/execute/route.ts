@@ -10,6 +10,7 @@ import {
   updateParkingSession,
 } from "@/lib/parking-agent/db";
 import type { ParkingNotificationType } from "@/lib/parking-agent/types";
+import { ensureTrustedOrigin } from "@/lib/security/origin";
 
 export const runtime = "nodejs";
 
@@ -18,6 +19,13 @@ type ExecutePaymentRequest = {
   zoneNumber?: string;
   durationMinutes?: number;
   renewFromSessionId?: string | null;
+  paymentDetails?: {
+    cardNumber?: string;
+    cardCCV?: string;
+    cardExpiration?: string;
+    zipCode?: string;
+    license?: string;
+  };
 };
 
 type ExecutePaymentInput = {
@@ -38,6 +46,15 @@ const QUEUED_NOTIFICATION_TYPES: ParkingNotificationType[] = [
   "renew_reminder",
   "parking_expired",
 ];
+
+function jsonNoStore(body: unknown, status: number): NextResponse {
+  return NextResponse.json(body, {
+    status,
+    headers: {
+      "Cache-Control": "no-store",
+    },
+  });
+}
 
 function parseDurationMinutes(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -69,6 +86,61 @@ function computeReminderAt(now: Date, expiresAt: Date, durationMinutes: number):
   return new Date(reminderMillis).toISOString();
 }
 
+function normalizeDigits(value: string): string {
+  return value.replace(/\D+/g, "");
+}
+
+function isLuhnValid(cardNumberDigits: string): boolean {
+  let sum = 0;
+  let doubleDigit = false;
+  for (let i = cardNumberDigits.length - 1; i >= 0; i -= 1) {
+    let digit = Number(cardNumberDigits[i]);
+    if (doubleDigit) {
+      digit *= 2;
+      if (digit > 9) {
+        digit -= 9;
+      }
+    }
+    sum += digit;
+    doubleDigit = !doubleDigit;
+  }
+  return sum % 10 === 0;
+}
+
+function normalizeExpiration(value: string): string {
+  const trimmed = value.trim();
+  const match = trimmed.match(/^(\d{2})\s*\/\s*(\d{2})$/) || trimmed.match(/^(\d{2})(\d{2})$/);
+  if (!match) {
+    return "";
+  }
+  const month = Number(match[1]);
+  const year = Number(match[2]);
+  if (month < 1 || month > 12) {
+    return "";
+  }
+  const expiry = new Date(2000 + year, month, 0, 23, 59, 59, 999);
+  if (Number.isNaN(expiry.getTime()) || expiry.getTime() < Date.now()) {
+    return "";
+  }
+  return `${String(month).padStart(2, "0")}/${String(year).padStart(2, "0")}`;
+}
+
+function normalizeZipCode(value: string): string {
+  const normalized = value.trim().toUpperCase();
+  if (!/^[A-Z0-9 -]{3,10}$/.test(normalized)) {
+    return "";
+  }
+  return normalized;
+}
+
+function normalizeLicense(value: string): string {
+  const normalized = value.trim().toUpperCase();
+  if (!/^[A-Z0-9 -]{2,12}$/.test(normalized)) {
+    return "";
+  }
+  return normalized;
+}
+
 async function executePayment(input: ExecutePaymentInput): Promise<{ paymentStatus: "confirmed" }> {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
@@ -93,8 +165,14 @@ async function executePayment(input: ExecutePaymentInput): Promise<{ paymentStat
 }
 
 export async function POST(request: NextRequest) {
+  const originViolation = ensureTrustedOrigin(request);
+  if (originViolation) {
+    return originViolation;
+  }
+
   const auth = await requireAuthenticatedProfile(request);
   if (!auth.ok) {
+    auth.response.headers.set("Cache-Control", "no-store");
     return auth.response;
   }
 
@@ -102,60 +180,71 @@ export async function POST(request: NextRequest) {
   try {
     body = (await request.json()) as ExecutePaymentRequest;
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+    return jsonNoStore({ error: "Invalid JSON body." }, 400);
   }
 
   const sessionId = typeof body.sessionId === "string" ? body.sessionId.trim() : "";
   const zoneNumber = typeof body.zoneNumber === "string" ? body.zoneNumber.trim() : "";
   const durationMinutes = parseDurationMinutes(body.durationMinutes);
   const renewFromSessionId = typeof body.renewFromSessionId === "string" ? body.renewFromSessionId.trim() : null;
+  const paymentDetails = body.paymentDetails;
 
   if (!sessionId || !zoneNumber || durationMinutes === null || durationMinutes <= 0) {
-    return NextResponse.json(
+    return jsonNoStore(
       { error: "`sessionId`, `zoneNumber`, and positive `durationMinutes` are required." },
-      { status: 400 },
+      400,
     );
   }
 
   const sessionResult = await fetchParkingSessionById(auth.value.config, sessionId);
   if (!sessionResult.ok) {
-    return NextResponse.json({ error: sessionResult.error }, { status: 502 });
+    return jsonNoStore({ error: sessionResult.error }, 502);
   }
 
   const session = sessionResult.value;
   if (!session) {
-    return NextResponse.json({ error: "Parking session not found." }, { status: 404 });
+    return jsonNoStore({ error: "Parking session not found." }, 404);
   }
 
   if (session.profile_id !== auth.value.profile.id) {
-    return NextResponse.json({ error: "Unauthorized for this parking session." }, { status: 403 });
+    return jsonNoStore({ error: "Unauthorized for this parking session." }, 403);
   }
 
   if (session.status === "cancelled") {
-    return NextResponse.json({ error: "Cannot execute payment for a cancelled session." }, { status: 400 });
+    return jsonNoStore({ error: "Cannot execute payment for a cancelled session." }, 400);
   }
 
-  const cardNumber = request.headers.get("x-card-number")?.trim() || "";
-  const cardCCV = request.headers.get("x-card-ccv")?.trim() || "";
-  const cardExpiration = request.headers.get("x-card-expiration")?.trim() || "";
-  const zipCode = request.headers.get("x-zip-code")?.trim() || "";
-  const licenseFromHeader = request.headers.get("x-license")?.trim() || "";
-  const licenseFromProfile = auth.value.profile.license_plate?.trim() || "";
-  const license = licenseFromHeader || licenseFromProfile;
+  const cardNumber = typeof paymentDetails?.cardNumber === "string" ? normalizeDigits(paymentDetails.cardNumber) : "";
+  const cardCCV = typeof paymentDetails?.cardCCV === "string" ? normalizeDigits(paymentDetails.cardCCV) : "";
+  const cardExpiration =
+    typeof paymentDetails?.cardExpiration === "string" ? normalizeExpiration(paymentDetails.cardExpiration) : "";
+  const zipCode = typeof paymentDetails?.zipCode === "string" ? normalizeZipCode(paymentDetails.zipCode) : "";
+  const licenseFromBody = typeof paymentDetails?.license === "string" ? paymentDetails.license.trim() : "";
+  const licenseFromProfile = auth.value.profile.license_plate?.trim().toUpperCase() || "";
+  const license = normalizeLicense(licenseFromBody || licenseFromProfile);
   const email = auth.value.profile.email?.trim() || "";
   const userName = auth.value.profile.username;
 
   if (!cardNumber || !cardCCV || !cardExpiration || !zipCode || !license) {
-    return NextResponse.json(
-      { error: "Missing payment headers. Required: x-card-number, x-card-ccv, x-card-expiration, x-zip-code, x-license." },
-      { status: 400 },
+    return jsonNoStore(
+      {
+        error:
+          "Missing payment details. Required: paymentDetails.cardNumber, paymentDetails.cardCCV, paymentDetails.cardExpiration, paymentDetails.zipCode, paymentDetails.license.",
+      },
+      400,
     );
+  }
+  if (cardNumber.length < 12 || cardNumber.length > 19 || !isLuhnValid(cardNumber)) {
+    return jsonNoStore({ error: "Invalid card number." }, 400);
+  }
+  if (!/^\d{3,4}$/.test(cardCCV)) {
+    return jsonNoStore({ error: "Invalid CCV." }, 400);
   }
 
   if (!email || !userName) {
-    return NextResponse.json(
+    return jsonNoStore(
       { error: "Profile is missing username or email. Update your profile and retry." },
-      { status: 400 },
+      400,
     );
   }
 
@@ -187,7 +276,7 @@ export async function POST(request: NextRequest) {
     });
 
     if (!updateResult.ok) {
-      return NextResponse.json({ error: updateResult.error }, { status: 502 });
+      return jsonNoStore({ error: updateResult.error }, 502);
     }
 
     const notifications = await createParkingNotifications(auth.value.config, [
@@ -218,7 +307,7 @@ export async function POST(request: NextRequest) {
     ]);
 
     if (!notifications.ok) {
-      return NextResponse.json({ error: notifications.error }, { status: 502 });
+      return jsonNoStore({ error: notifications.error }, 502);
     }
 
     if (renewFromSessionId) {
@@ -235,17 +324,18 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json(
+    return jsonNoStore(
       {
         ok: true,
         paymentStatus: paymentResult.paymentStatus,
         expiresAt: expiresAt.toISOString(),
         queuedNotifications: QUEUED_NOTIFICATION_TYPES,
       },
-      { status: 200 },
+      200,
     );
   } catch (error) {
-    console.error("Payment execute error:", error);
-    return NextResponse.json({ error: "Failed to execute parking payment." }, { status: 500 });
+    const message = error instanceof Error ? error.message : "Unknown payment execution error.";
+    console.error("Payment execute error:", { message });
+    return jsonNoStore({ error: "Failed to execute parking payment." }, 500);
   }
 }

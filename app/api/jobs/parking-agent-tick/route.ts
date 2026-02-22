@@ -59,7 +59,7 @@ function appBaseUrl(): string {
 function cronAuthorized(request: NextRequest): boolean {
   const expected = process.env.CRON_SECRET?.trim();
   if (!expected) {
-    return false;
+    return process.env.NODE_ENV !== "production";
   }
 
   const header = request.headers.get("authorization") || "";

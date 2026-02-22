@@ -2,6 +2,7 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
+import { primePaymentProfileSessionUnlockFromCredentials } from "@/lib/payment-profile-storage";
 
 type FormValues = {
   username: string;
@@ -143,6 +144,10 @@ export function AccountProfileForm() {
         if (!response.ok) {
           throw new Error(payload.error || "Failed to save account profile.");
         }
+
+        await primePaymentProfileSessionUnlockFromCredentials(values.username.trim().toLowerCase(), values.password).catch(() => {
+          // If unlock priming fails, payment page fallback unlock will handle it.
+        });
 
         router.push(payload.redirectTo || "/parking");
       } catch (requestError) {

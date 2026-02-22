@@ -6,10 +6,14 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint .",
     "tauri": "tauri",
+    "docker:build": "docker build -t parkos .",
+    "docker:run": "docker run --rm -p 3000:3000 --env-file .env parkos",
     "download:parking": "node scripts/download-arcgis-layer.mjs --appid 0e63a798f5d9435f9137ce38245d63ee --output data/slo-street-parking.json --hint parking",
-    "download:downtown-rates": "node scripts/download-downtown-rates.mjs"
+    "download:downtown-rates": "node scripts/download-downtown-rates.mjs",
+    "cron:tick": "node scripts/trigger-parking-agent-tick.mjs",
+    "smoke:prod": "node scripts/smoke-production.mjs"
   },
   "dependencies": {
     "@googlemaps/js-api-loader": "^2.0.2",

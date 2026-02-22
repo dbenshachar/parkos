@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { primePaymentProfileSessionUnlockFromCredentials } from "@/lib/payment-profile-storage";
+
 type LoginResponse = {
   ok?: boolean;
   hasSavedDetails?: boolean;
@@ -45,6 +47,10 @@ export function HomeLoginCard() {
       if (!response.ok) {
         throw new Error(payload.error || "Failed to log in.");
       }
+
+      await primePaymentProfileSessionUnlockFromCredentials(trimmedUsername, password).catch(() => {
+        // If unlock priming fails, payment page fallback unlock will handle it.
+      });
 
       if (!payload.hasSavedDetails) {
         router.push(`/account?username=${encodeURIComponent(trimmedUsername)}`);

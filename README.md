@@ -18,6 +18,22 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
+## Production + iOS quickstart
+
+This project now includes:
+
+- Docker deploy support with Playwright runtime (`Dockerfile`, `.dockerignore`)
+- Environment template (`.env.example`)
+- Production verification scripts:
+  - `npm run cron:tick`
+  - `npm run smoke:prod`
+- iOS hosted-shell config:
+  - `src-tauri/tauri.ios.conf.json`
+  - `src-tauri/Info.ios.plist`
+  - `src-tauri/capabilities/default.json`
+
+Full guide: `docs/ios-hosted-shell.md`
+
 ## Download SLO parking data (ArcGIS)
 
 This repo includes a helper script to download the ArcGIS layer as GeoJSON:
@@ -240,6 +256,24 @@ New APIs:
 - `POST /api/jobs/parking-agent-tick` (cron)
 - `POST /api/sms/twilio/webhook` (STOP/START handling)
 
+Payment execute request shape:
+
+```json
+{
+  "sessionId": "<id>",
+  "zoneNumber": "80511",
+  "durationMinutes": 60,
+  "renewFromSessionId": null,
+  "paymentDetails": {
+    "cardNumber": "<card_number_digits_only>",
+    "cardCCV": "<card_cvv>",
+    "cardExpiration": "MM/YY",
+    "zipCode": "<billing_zip_or_postal>",
+    "license": "<plate_number>"
+  }
+}
+```
+
 ## Required environment variables
 
 Use `.env.example` as the source of truth. Core variables:
@@ -247,6 +281,10 @@ Use `.env.example` as the source of truth. Core variables:
 - OpenAI: `OPENAI_API_KEY`, optional `OPENAI_PARKING_AGENT_MODEL`
 - Supabase: `SUPABASE_URL`, `SUPABASE_API_KEY`
 - App links/scheduling: `APP_BASE_URL`, `CRON_SECRET`
+- Session security: `PARKOS_SESSION_SECRET`
+- Payment profile encryption rollout:
+  - `PAYMENT_PROFILE_ENCRYPTION_ENFORCED` (`false` for transitional rollout, then `true`)
+  - `NEXT_PUBLIC_PAYMENT_PROFILE_ENCRYPTION_ENFORCED` (client mirror of the same flag)
 - Twilio: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and either `TWILIO_MESSAGING_SERVICE_SID` or `TWILIO_FROM_NUMBER`
 - Optional live-rule sources: `PARKING_RULE_SOURCE_URLS` (comma-separated)
 
@@ -257,11 +295,50 @@ Schedule `POST /api/jobs/parking-agent-tick` every minute with:
 - Header: `Authorization: Bearer <CRON_SECRET>`
 - Behavior: sends due SMS notifications (`payment_confirmed`, `post_payment_info`, `renew_reminder`, `parking_expired`)
 
+Manual cron tick:
+
+```bash
+npm run cron:tick
+```
+
+## Production smoke checks
+
+Use `scripts/smoke-production.mjs` through:
+
+```bash
+APP_BASE_URL=https://parkos.example.com \
+SMOKE_USERNAME=<username> \
+SMOKE_PASSWORD=<password> \
+CRON_SECRET=<cron_secret> \
+npm run smoke:prod
+```
+
+## iOS wrapper setup (Tauri)
+
+1. Install full Xcode.
+2. Update placeholders in `src-tauri/tauri.ios.conf.json` and `src-tauri/Info.ios.plist`.
+3. Run `npm run tauri -- ios init`.
+4. Run `npm run tauri -- ios dev` for device testing.
+5. Run `npm run tauri -- ios build` for release builds.
+
+If `ios init` fails on `xcodegen`, fix local Homebrew write permissions first.
+
 ## Database migration
 
 Run the new migration before using parking-agent APIs:
 
 - `supabase/20260222_add_parking_agent_tables.sql`
+- `supabase/20260222_enable_rls_for_pci.sql`
+
+## PCI documentation
+
+- `docs/pci/cde-data-flow.md`
+- `docs/pci/payment-profile-encryption-rollout.md`
+- `docs/pci/saq-d-requirement-evidence-matrix.md`
+- `docs/pci/key-management-sop.md`
+- `docs/pci/vulnerability-management-plan.md`
+- `docs/pci/chd-incident-response-runbook.md`
+- `docs/pci/qsa-acquirer-evidence-pack.md`
 
 ## Learn More
 
@@ -272,8 +349,7 @@ To learn more about Next.js, take a look at the following resources:
 
 You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
 
-## Deploy on Vercel
+## Deployment note
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Because ParkOS uses server-side Playwright for payment execution, deploy to infrastructure that supports
+long-running Node.js processes and Chromium dependencies (container/VM deployment is recommended).

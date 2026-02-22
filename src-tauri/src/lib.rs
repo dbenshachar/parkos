@@ -1,16 +1,9 @@
-use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use tauri::Manager;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PaymentProfile {
-  card_number: String,
-  card_expiration: String,
-  zip_code: String,
-  license: String,
-}
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 fn payment_profile_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
   let mut path = app
@@ -23,7 +16,7 @@ fn payment_profile_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-fn load_payment_profile(app: tauri::AppHandle) -> Result<Option<PaymentProfile>, String> {
+fn load_payment_profile_blob(app: tauri::AppHandle) -> Result<Option<String>, String> {
   let path = payment_profile_path(&app)?;
   if !path.exists() {
     return Ok(None);
@@ -31,14 +24,11 @@ fn load_payment_profile(app: tauri::AppHandle) -> Result<Option<PaymentProfile>,
 
   let raw = fs::read_to_string(path)
     .map_err(|error| format!("Failed to read payment profile file: {error}"))?;
-  let parsed = serde_json::from_str::<PaymentProfile>(&raw)
-    .map_err(|error| format!("Failed to parse payment profile file: {error}"))?;
-
-  Ok(Some(parsed))
+  Ok(Some(raw))
 }
 
 #[tauri::command]
-fn save_payment_profile(app: tauri::AppHandle, profile: PaymentProfile) -> Result<(), String> {
+fn save_payment_profile_blob(app: tauri::AppHandle, blob: String) -> Result<(), String> {
   let path = payment_profile_path(&app)?;
 
   if let Some(parent) = path.parent() {
@@ -46,11 +36,19 @@ fn save_payment_profile(app: tauri::AppHandle, profile: PaymentProfile) -> Resul
       .map_err(|error| format!("Failed to create payment profile directory: {error}"))?;
   }
 
-  let serialized = serde_json::to_string_pretty(&profile)
-    .map_err(|error| format!("Failed to serialize payment profile: {error}"))?;
+  let parsed = serde_json::from_str::<serde_json::Value>(&blob)
+    .map_err(|error| format!("Failed to parse payment profile blob JSON: {error}"))?;
+  let serialized = serde_json::to_string_pretty(&parsed)
+    .map_err(|error| format!("Failed to serialize payment profile blob: {error}"))?;
 
-  fs::write(path, serialized)
+  fs::write(&path, serialized)
     .map_err(|error| format!("Failed to write payment profile file: {error}"))?;
+
+  #[cfg(unix)]
+  {
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+      .map_err(|error| format!("Failed to set payment profile file permissions: {error}"))?;
+  }
 
   Ok(())
 }
@@ -58,7 +56,7 @@ fn save_payment_profile(app: tauri::AppHandle, profile: PaymentProfile) -> Resul
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
-    .invoke_handler(tauri::generate_handler![load_payment_profile, save_payment_profile])
+    .invoke_handler(tauri::generate_handler![load_payment_profile_blob, save_payment_profile_blob])
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(

@@ -14,6 +14,8 @@ import {
   updateProfile,
   verifyPassword,
 } from "@/lib/account-store";
+import { ensureTrustedOrigin, clientIp } from "@/lib/security/origin";
+import { checkAndConsumeRateLimit } from "@/lib/security/rate-limit";
 
 type SaveProfileRequest = {
   username?: string;
@@ -30,6 +32,15 @@ type SaveProfileRequest = {
 
 const E164_PHONE_REGEX = /^\+[1-9][0-9]{7,14}$/;
 
+function jsonNoStore(body: unknown, status: number): NextResponse {
+  return NextResponse.json(body, {
+    status,
+    headers: {
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
 function isUniqueConstraintError(error: string): boolean {
   const normalized = error.toLowerCase();
   return (
@@ -40,11 +51,25 @@ function isUniqueConstraintError(error: string): boolean {
 }
 
 export async function POST(request: NextRequest) {
+  const originViolation = ensureTrustedOrigin(request);
+  if (originViolation) {
+    return originViolation;
+  }
+
+  const endpointRate = checkAndConsumeRateLimit(`account-profile-create:${clientIp(request)}`, {
+    maxRequests: 12,
+    windowMs: 10 * 60_000,
+    blockMs: 10 * 60_000,
+  });
+  if (!endpointRate.allowed) {
+    return jsonNoStore({ error: "Too many account setup attempts. Try again later." }, 429);
+  }
+
   let body: SaveProfileRequest;
   try {
     body = (await request.json()) as SaveProfileRequest;
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+    return jsonNoStore({ error: "Invalid JSON body." }, 400);
   }
 
   const username = normalizeUsername(parseRequiredText(body.username));
@@ -68,47 +93,37 @@ export async function POST(request: NextRequest) {
     !carModel ||
     !licensePlate
   ) {
-    return NextResponse.json(
+    return jsonNoStore(
       {
         error:
           "Required fields missing: username, password, email, carMake, carModel, and licensePlate are required.",
       },
-      { status: 400 },
+      400,
     );
   }
   if (password.length < 8) {
-    return NextResponse.json(
-      { error: "Password must be at least 8 characters." },
-      { status: 400 },
-    );
+    return jsonNoStore({ error: "Password must be at least 8 characters." }, 400);
   }
   if (phoneE164 && !E164_PHONE_REGEX.test(phoneE164)) {
-    return NextResponse.json(
-      { error: "Phone number must be in E.164 format (e.g. +15551234567)." },
-      { status: 400 },
-    );
+    return jsonNoStore({ error: "Phone number must be in E.164 format (e.g. +15551234567)." }, 400);
   }
   if (smsOptIn && !phoneE164) {
-    return NextResponse.json(
-      { error: "A phone number is required when SMS reminders are enabled." },
-      { status: 400 },
-    );
+    return jsonNoStore({ error: "A phone number is required when SMS reminders are enabled." }, 400);
   }
 
   const config = getSupabaseConfig();
   if (!config) {
-    return NextResponse.json(
+    return jsonNoStore(
       {
         error:
           "Missing SUPABASE_URL or SUPABASE_API_KEY environment variables.",
       },
-      { status: 500 },
+      500,
     );
   }
-
   const existingProfile = await fetchProfileByUsername(config, username);
   if (!existingProfile.ok) {
-    return NextResponse.json({ error: existingProfile.error }, { status: 502 });
+    return jsonNoStore({ error: existingProfile.error }, 502);
   }
 
   const passwordHash = hashPassword(password);
@@ -118,11 +133,11 @@ export async function POST(request: NextRequest) {
       !existingProfile.value.password_hash ||
       !verifyPassword(password, existingProfile.value.password_hash)
     ) {
-      return NextResponse.json(
+      return jsonNoStore(
         {
           error: "Username already exists. Use the correct password to log in.",
         },
-        { status: 401 },
+        401,
       );
     }
 
@@ -143,26 +158,20 @@ export async function POST(request: NextRequest) {
       },
     );
     if (!updatedProfile.ok) {
-      return NextResponse.json(
-        { error: updatedProfile.error },
-        { status: 502 },
-      );
+      return jsonNoStore({ error: updatedProfile.error }, 502);
     }
     if (!updatedProfile.value.id || !updatedProfile.value.username) {
-      return NextResponse.json(
-        { error: "Account update returned invalid data." },
-        { status: 502 },
-      );
+      return jsonNoStore({ error: "Account update returned invalid data." }, 502);
     }
 
-    const response = NextResponse.json(
+    const response = jsonNoStore(
       {
         ok: true,
         created: false,
         profileId: updatedProfile.value.id,
         redirectTo: "/parking",
       },
-      { status: 200 },
+      200,
     );
     setAuthSessionCookie(response, {
       profileId: updatedProfile.value.id,
@@ -190,30 +199,27 @@ export async function POST(request: NextRequest) {
       createdProfile.status === 409 ||
       isUniqueConstraintError(createdProfile.error)
     ) {
-      return NextResponse.json(
+      return jsonNoStore(
         {
           error: "Username already exists. Please choose a different username.",
         },
-        { status: 409 },
+        409,
       );
     }
-    return NextResponse.json({ error: createdProfile.error }, { status: 502 });
+    return jsonNoStore({ error: createdProfile.error }, 502);
   }
   if (!createdProfile.value.id || !createdProfile.value.username) {
-    return NextResponse.json(
-      { error: "Account creation returned invalid data." },
-      { status: 502 },
-    );
+    return jsonNoStore({ error: "Account creation returned invalid data." }, 502);
   }
 
-  const response = NextResponse.json(
+  const response = jsonNoStore(
     {
       ok: true,
       created: true,
       profileId: createdProfile.value.id,
       redirectTo: "/parking",
     },
-    { status: 200 },
+    200,
   );
   setAuthSessionCookie(response, {
     profileId: createdProfile.value.id,
