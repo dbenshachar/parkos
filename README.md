@@ -74,85 +74,127 @@ endpoint (`/api/google-maps/client-key`), so you do not need a separate public e
 
 The app now exposes:
 
-- `POST /api/parking/recommend`
-- `POST /api/parking/parse-trip`
+- `POST /api/parking/agent-plan` (primary unified trip agent endpoint)
+- `POST /api/parking/recommend` (legacy direct destination endpoint, still supported)
+- `POST /api/parking/parse-trip` (legacy parser endpoint, still supported)
 
-Note: this endpoint requires running Next.js with a server (`npm run dev` / `npm run start`).
+Note: these endpoints require running Next.js with a server (`npm run dev` / `npm run start`).
+
+## Unified trip agent (`POST /api/parking/agent-plan`)
 
 Request JSON:
 
 ```json
 {
-  "destination": "Firestone Grill San Luis Obispo",
+  "prompt": "Going to Luna Red today @ 8pm",
   "limit": 5
 }
 ```
 
-Response includes:
+The deterministic agent pipeline is:
 
-- `destination`
-- `street`
-- `destinationLat`
-- `destinationLng`
-- `recommendations` with:
-  `zoneNumber`, `price`, `street`, `intendedDestination`, `distanceMeters`
+1. Parse trip intent (destination + optional arrival time)
+2. Resolve Google Places destination candidates
+3. Score and select best destination
+4. Cross-reference paid + residential zone geojson
+5. Return either `ready` recommendations or `needs_clarification`
 
-UI output format:
+The `reasoning` block now includes:
 
-```text
-<Paid|Residential> Zone <zone number> | <price> | <street> | <intended destination> | <distance>m away
+- `steps`: deterministic step-by-step execution trace
+- `factors`: confidence score components used in final decision
+- `candidateDiagnostics`: ranked place candidates with per-candidate score and reasons
+- `parkingPointRationale`: plain-language explanation for why each parking point was chosen
+
+Ready response (example):
+
+```json
+{
+  "status": "ready",
+  "runId": "f6f8f529-27c9-4cf4-8f3f-c8a6a424318f",
+  "trip": {
+    "destination": "Luna Red",
+    "arrivalTimeIso": "2026-02-22T20:00:00-08:00",
+    "arrivalTimeLabel": "Sun, Feb 22, 2026, 8:00 PM PST",
+    "timezone": "America/Los_Angeles"
+  },
+  "destination": {
+    "name": "Luna Red",
+    "street": "1023 Chorro St",
+    "formattedAddress": "1023 Chorro St, San Luis Obispo, CA 93401, USA",
+    "lat": 35.281,
+    "lng": -120.661,
+    "placeId": "..."
+  },
+  "recommendations": {
+    "nearestParkingDistanceMeters": 120,
+    "paid": [],
+    "residential": []
+  },
+  "reasoning": {
+    "confidence": "high",
+    "confidenceScore": 0.78,
+    "warnings": [],
+    "steps": []
+  }
+}
 ```
 
-Distance behavior:
+Clarification response (example):
 
-- Destination is accepted if it is within `1000m` of a paid downtown parking zone.
-- Output includes each recommended zone's distance from the destination in meters.
-- Destination output now includes:
-  - paid downtown recommendations (PayByPhone zones)
-  - nearby residential district recommendations (RPD zones) within 1000m
-- UI includes an embedded interactive Google map (marker-only, no route lines):
-  - black marker: destination
-  - red markers: paid parking suggestions
-  - blue markers: residential parking suggestions
+```json
+{
+  "status": "needs_clarification",
+  "runId": "73f16452-d858-42cb-8668-dbe5b7db2f8d",
+  "clarification": {
+    "target": "destination",
+    "question": "I found multiple likely destinations. Which one do you mean?",
+    "options": [
+      {
+        "label": "Luna Red — 1023 Chorro St, San Luis Obispo, CA 93401, USA",
+        "value": "Luna Red 1023 Chorro St, San Luis Obispo, CA 93401, USA"
+      }
+    ]
+  },
+  "partialTrip": {
+    "destination": "Luna Red",
+    "arrivalTimeIso": null,
+    "arrivalTimeLabel": null,
+    "timezone": "America/Los_Angeles"
+  },
+  "reasoning": {
+    "confidence": "medium",
+    "confidenceScore": 0.54,
+    "warnings": [],
+    "steps": []
+  }
+}
+```
 
-## Trip Assistant parsing
+Clarification behavior:
 
-Trip Assistant accepts free-text trip prompts, uses an LLM to extract destination + intended
-arrival time, then auto-runs destination parking lookup.
+- Destination ambiguity returns `target: "destination"` and candidate options
+- Time ambiguity returns `target: "arrival_time"` and asks for explicit arrival time
+- Out-of-downtown matches return `target: "destination_refinement"` instead of silently guessing
 
-Trip parsing endpoint:
+Distance behavior remains unchanged:
+
+- Destination is accepted for `ready` responses only if nearest paid downtown zone is within `1000m`
+- Output includes each recommendation's distance in meters
+- Recommendations include both paid downtown zones and nearby residential zones
+- UI map markers remain: black (destination), red (paid), blue (residential)
+
+Arrival time is captured for context and is not yet used in ranking.
+
+## Legacy endpoints
+
+Legacy parse endpoint:
 
 - `POST /api/parking/parse-trip`
 
-Request JSON:
+Legacy destination endpoint:
 
-```json
-{
-  "prompt": "Dinner at Firestone Grill tomorrow at 7pm"
-}
-```
-
-Response JSON:
-
-```json
-{
-  "destination": "Firestone Grill",
-  "arrivalTimeIso": "2026-02-22T19:00:00-08:00",
-  "arrivalTimeLabel": "Sun, Feb 22, 2026, 7:00 PM PST",
-  "timezone": "America/Los_Angeles",
-  "confidence": "high",
-  "warnings": []
-}
-```
-
-Fallback behavior:
-
-- If parsing fails (missing key, malformed output, ambiguous time, or LLM error), ParkOS falls back
-  to destination-only parsing:
-  - `destination` is set to the original prompt text
-  - `arrivalTimeIso` / `arrivalTimeLabel` are `null`
-  - response still returns `200` with warnings
-- Arrival time is captured for future traffic-density analysis and is not yet used in recommendation ranking.
+- `POST /api/parking/recommend`
 
 ## Live location zone detection
 

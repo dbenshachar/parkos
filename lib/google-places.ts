@@ -48,6 +48,14 @@ export class GooglePlacesLookupError extends Error {
   }
 }
 
+function clampMaxResultCount(value: unknown): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return 5;
+  }
+  return Math.max(1, Math.min(5, Math.floor(numeric)));
+}
+
 function getGoogleMapsApiKey(): string {
   const key = process.env.GOOGLE_MAPS_API_KEY?.trim();
   if (!key) {
@@ -81,7 +89,24 @@ function normalizePlace(place: GooglePlacesPlace): ResolvedDestination | null {
   };
 }
 
-export async function resolveDestinationWithGooglePlaces(query: string): Promise<ResolvedDestination> {
+function prioritizeSloCandidates(candidates: ResolvedDestination[]): ResolvedDestination[] {
+  const scored = candidates.map((candidate, index) => ({
+    candidate,
+    index,
+    localBoost: candidate.formattedAddress.toLowerCase().includes("san luis obispo") ? 1 : 0,
+  }));
+
+  scored.sort((a, b) => {
+    if (a.localBoost !== b.localBoost) {
+      return b.localBoost - a.localBoost;
+    }
+    return a.index - b.index;
+  });
+
+  return scored.map((item) => item.candidate);
+}
+
+export async function searchDestinationsWithGooglePlaces(query: string, maxResults = 5): Promise<ResolvedDestination[]> {
   const destinationQuery = query.trim();
   if (!destinationQuery) {
     throw new GooglePlacesLookupError("Destination query cannot be empty.");
@@ -89,6 +114,7 @@ export async function resolveDestinationWithGooglePlaces(query: string): Promise
 
   const apiKey = getGoogleMapsApiKey();
   const searchBias = getDowntownSearchBias();
+  const resultCount = clampMaxResultCount(maxResults);
 
   const response = await fetch(GOOGLE_PLACES_TEXT_SEARCH_URL, {
     method: "POST",
@@ -99,7 +125,7 @@ export async function resolveDestinationWithGooglePlaces(query: string): Promise
     },
     body: JSON.stringify({
       textQuery: `${destinationQuery} in downtown San Luis Obispo`,
-      maxResultCount: 5,
+      maxResultCount: resultCount,
       languageCode: "en",
       regionCode: "US",
       locationBias: {
@@ -124,17 +150,25 @@ export async function resolveDestinationWithGooglePlaces(query: string): Promise
     throw new GooglePlacesLookupError(normalizedMessage, response.status);
   }
 
-  const normalizedPlaces = (payload.places ?? [])
-    .map((place) => normalizePlace(place))
-    .filter((value): value is ResolvedDestination => Boolean(value));
+  const normalizedPlaces = prioritizeSloCandidates(
+    (payload.places ?? [])
+      .map((place) => normalizePlace(place))
+      .filter((value): value is ResolvedDestination => Boolean(value)),
+  );
 
   if (normalizedPlaces.length === 0) {
     throw new GooglePlacesLookupError("No destination results were returned from Google Places.");
   }
 
-  const slocityCandidate = normalizedPlaces.find((candidate) =>
-    candidate.formattedAddress.toLowerCase().includes("san luis obispo"),
-  );
+  return normalizedPlaces.slice(0, resultCount);
+}
 
-  return slocityCandidate ?? normalizedPlaces[0];
+export async function resolveDestinationWithGooglePlaces(query: string): Promise<ResolvedDestination> {
+  const candidates = await searchDestinationsWithGooglePlaces(query, 5);
+  const [bestCandidate] = candidates;
+  if (!bestCandidate) {
+    throw new GooglePlacesLookupError("No destination results were returned from Google Places.");
+  }
+
+  return bestCandidate;
 }
