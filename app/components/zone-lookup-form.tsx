@@ -250,10 +250,6 @@ function formatCoordinate(value: number): string {
   return value.toFixed(6);
 }
 
-function formatStepName(name: string): string {
-  return name.replace(/_/g, " ");
-}
-
 function toLiveCoordinates(position: GeolocationPosition): LiveCoordinates {
   return {
     lat: position.coords.latitude,
@@ -272,19 +268,12 @@ export function ZoneLookupForm() {
   const [tripReasoning, setTripReasoning] = useState<TripAgentReasoning | null>(null);
   const [tripClarification, setTripClarification] = useState<TripAgentClarification | null>(null);
   const [tripClarificationAnswer, setTripClarificationAnswer] = useState("");
-  const [tripRunId, setTripRunId] = useState<string | null>(null);
-  const [tripConfidence, setTripConfidence] = useState<{
-    label: "high" | "medium" | "low";
-    score: number;
-  } | null>(null);
 
   const [destination, setDestination] = useState("");
   const [destinationResult, setDestinationResult] = useState<DestinationLookupResponse | null>(null);
   const [isMapOpen, setIsMapOpen] = useState(false);
 
   const [isTrackingLiveLocation, setIsTrackingLiveLocation] = useState(false);
-  const [testLatitude, setTestLatitude] = useState("");
-  const [testLongitude, setTestLongitude] = useState("");
   const [liveLocation, setLiveLocation] = useState<LiveCoordinates | null>(null);
   const [liveZoneResult, setLiveZoneResult] = useState<CurrentZoneResponse | null>(null);
   const [liveZoneLoading, setLiveZoneLoading] = useState(false);
@@ -483,8 +472,6 @@ export function ZoneLookupForm() {
         setRenewFromSessionId(session.id);
         setPaymentZoneValue(session.zoneNumber || "");
         setPaymentDurationMinutes(String(session.durationMinutes || 60));
-        setTestLatitude(session.lat.toString());
-        setTestLongitude(session.lng.toString());
         setLiveLocation(restoredCoords);
         latestLocationRef.current = restoredCoords;
         lastSentLocationRef.current = restoredCoords;
@@ -563,8 +550,6 @@ export function ZoneLookupForm() {
     setTripWarnings([]);
     setTripClarification(null);
     setTripClarificationAnswer("");
-    setTripRunId(null);
-    setTripConfidence(null);
     setTripReasoning(null);
     setDestinationResult(null);
 
@@ -600,11 +585,6 @@ export function ZoneLookupForm() {
         },
         parkingPointRationale: payload.reasoning.parkingPointRationale ?? [],
       };
-      setTripRunId(payload.runId);
-      setTripConfidence({
-        label: normalizedReasoning.confidence,
-        score: normalizedReasoning.confidenceScore,
-      });
       setTripWarnings(normalizedReasoning.warnings);
       setTripReasoning(normalizedReasoning);
 
@@ -683,48 +663,6 @@ export function ZoneLookupForm() {
     await runTripAgent(nextPrompt);
   };
 
-  const onTestLocation = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-
-    const lat = Number.parseFloat(testLatitude);
-    const lng = Number.parseFloat(testLongitude);
-
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-      setLiveLocationError("Enter valid latitude and longitude values.");
-      return;
-    }
-
-    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-      setLiveLocationError("Latitude must be between -90 and 90, and longitude between -180 and 180.");
-      return;
-    }
-
-    const coords: LiveCoordinates = {
-      lat,
-      lng,
-      accuracyMeters: null,
-    };
-
-    setLiveLocationError(null);
-    setPaymentEntryMessage(null);
-    setParkedSnapshot(null);
-    setSessionRestoreMessage(null);
-    setRulesRundown(null);
-    setParkingSessionId(null);
-    setParkingSessionResumeToken(null);
-    setRenewFromSessionId(null);
-    setLiveLocation(coords);
-    latestLocationRef.current = coords;
-    lastSentLocationRef.current = coords;
-
-    try {
-      await resolveCurrentZoneForCoords(coords);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to resolve current parking zone.";
-      setLiveLocationError(message);
-    }
-  };
-
   const onHaveParked = async () => {
     setParkedSnapshotLoading(true);
     setPaymentEntryMessage(null);
@@ -735,7 +673,7 @@ export function ZoneLookupForm() {
       let coords = latestLocationRef.current ?? liveLocation;
       if (!coords) {
         if (geolocationSupported !== true) {
-          setLiveLocationError("Geolocation is unavailable. Enter coordinates and tap Test My Location first.");
+          setLiveLocationError("Geolocation is unavailable on this device/browser.");
           return;
         }
 
@@ -852,19 +790,13 @@ export function ZoneLookupForm() {
 
         {tripParseError ? <p className="mt-3 text-sm text-red-700">{tripParseError}</p> : null}
 
-        {(destination || arrivalTimeLabel || tripWarnings.length > 0 || tripConfidence || tripRunId) ? (
+        {(destination || arrivalTimeLabel || tripWarnings.length > 0) ? (
           <div className="mt-4 rounded-lg border border-black/10 bg-black/[0.02] p-4 text-sm text-black">
             <p>
               Parsed destination: <strong>{destination || "Not found"}</strong>
             </p>
             <p>Parsed arrival time: {arrivalTimeLabel || "Not specified"}</p>
             {arrivalTimeIso ? <p className="text-xs text-black/70">Normalized ISO: {arrivalTimeIso}</p> : null}
-            {tripConfidence ? (
-              <p className="text-xs text-black/70">
-                Confidence: {tripConfidence.label} ({tripConfidence.score.toFixed(2)})
-              </p>
-            ) : null}
-            {tripRunId ? <p className="text-xs text-black/60">Run ID: {tripRunId}</p> : null}
             {tripWarnings.length > 0 ? (
               <p className="mt-2 text-xs text-amber-700">{tripWarnings.join(" ")}</p>
             ) : null}
@@ -873,77 +805,31 @@ export function ZoneLookupForm() {
 
         {tripReasoning ? (
           <div className="mt-4 rounded-lg border border-black/10 bg-white p-4 text-sm text-black">
-            <p className="font-semibold">Why this recommendation?</p>
-            <p className="mt-1 text-xs text-black/70">
-              Strategy: distance-first ranking with destination confidence checks and downtown proximity validation.
-            </p>
-            {tripReasoning.factors.length > 0 ? (
-              <p className="mt-2 text-xs text-black/70">Score factors: {tripReasoning.factors.join(" | ")}</p>
-            ) : null}
-
-            <div className="mt-3">
-              <p className="text-xs font-medium uppercase tracking-wide text-black/70">Decision Steps</p>
-              <ol className="mt-1 space-y-2">
-                {tripReasoning.steps.map((step, index) => (
-                  <li key={`${step.name}-${index}`} className="rounded border border-black/10 bg-black/[0.02] p-2">
-                    <p className="text-xs font-semibold text-black">
-                      {index + 1}. {formatStepName(step.name)} ({step.outcome})
-                    </p>
-                    <p className="text-xs text-black/80">{step.detail}</p>
-                  </li>
-                ))}
-              </ol>
-            </div>
-
-            <div className="mt-3">
-              <p className="text-xs font-medium uppercase tracking-wide text-black/70">Candidate Scores</p>
-              <p className="mt-1 text-xs text-black/70">
-                Query: <span className="font-mono">{tripReasoning.candidateDiagnostics.query || "n/a"}</span>
-                {tripReasoning.candidateDiagnostics.topTwoScoreGap !== null
-                  ? ` | top gap: ${tripReasoning.candidateDiagnostics.topTwoScoreGap.toFixed(3)}`
-                  : ""}
-              </p>
-              {tripReasoning.candidateDiagnostics.rankedCandidates.length > 0 ? (
-                <div className="mt-2 space-y-2">
-                  {tripReasoning.candidateDiagnostics.rankedCandidates.map((candidate) => (
-                    <div
-                      key={`${candidate.placeId ?? candidate.formattedAddress}-${candidate.score}`}
-                      className="rounded border border-black/10 bg-black/[0.02] p-2"
-                    >
-                      <p className="text-xs font-semibold text-black">
-                        {candidate.destination} ({candidate.score.toFixed(3)})
-                      </p>
-                      <p className="text-xs text-black/70">{candidate.formattedAddress}</p>
-                      <p className="text-xs text-black/70">Reasoning: {candidate.reasons.join(", ")}</p>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="mt-1 text-xs text-black/60">No candidates available for this run.</p>
-              )}
-            </div>
-
-            <div className="mt-3">
-              <p className="text-xs font-medium uppercase tracking-wide text-black/70">Point Selection Rationale</p>
-              {tripReasoning.parkingPointRationale.length > 0 ? (
-                <div className="mt-2 space-y-2">
-                  {tripReasoning.parkingPointRationale.map((point) => (
-                    <div
-                      key={`${point.category}-${point.zoneNumber}-${point.distanceMeters}`}
-                      className="rounded border border-black/10 bg-black/[0.02] p-2"
-                    >
-                      <p className="text-xs font-semibold text-black">
-                        {point.category === "paid" ? "Paid" : "Residential"} zone {point.zoneNumber}
-                      </p>
-                      <p className="text-xs text-black/70">
-                        {Math.round(point.distanceMeters)}m away. {point.rationale}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="mt-1 text-xs text-black/60">No parking point rationale available yet for this run.</p>
-              )}
+            <p className="text-xs font-medium uppercase tracking-wide text-black/60">ParkOS Assistant</p>
+            <div className="mt-3 space-y-3">
+              <div className="ml-auto max-w-[90%] rounded-2xl bg-black px-3 py-2 text-sm text-white">
+                {tripPrompt.trim() || "Find parking near my destination."}
+              </div>
+              <div className="max-w-[92%] rounded-2xl border border-black/10 bg-black/[0.02] px-3 py-2 text-sm text-black">
+                <p>
+                  I found parking options near <strong>{destination || "your destination"}</strong>.
+                  {arrivalTimeLabel ? ` Arrival time noted: ${arrivalTimeLabel}.` : ""}
+                </p>
+                {tripReasoning.parkingPointRationale.length > 0 ? (
+                  <p className="mt-2 text-black/80">
+                    Best nearby options:{" "}
+                    {tripReasoning.parkingPointRationale
+                      .slice(0, 3)
+                      .map((point) =>
+                        `${point.category === "paid" ? "Paid" : "Residential"} ${point.zoneNumber} (${Math.round(point.distanceMeters)}m)`,
+                      )
+                      .join(", ")}
+                    .
+                  </p>
+                ) : (
+                  <p className="mt-2 text-black/80">I can help refine your destination to get better nearby options.</p>
+                )}
+              </div>
             </div>
           </div>
         ) : null}
@@ -1025,12 +911,12 @@ export function ZoneLookupForm() {
         <h2 className="text-xl font-semibold text-black">Live Location + Parked Check-In</h2>
         <p className="mt-2 text-sm text-black/70">
           Track your current position, detect your active parking zone, and use <strong>I have parked!</strong> to
-          capture your payment entry details. You can also enter manual coordinates below for testing.
+          capture your payment entry details.
         </p>
 
         {geolocationSupported === false ? (
           <p className="mt-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-            Geolocation is not supported in this browser. Use manual test coordinates instead.
+            Geolocation is not supported in this browser.
           </p>
         ) : geolocationSupported === null ? (
           <p className="mt-4 rounded-md border border-black/15 bg-black/[0.02] px-3 py-2 text-sm text-black/70">
@@ -1064,34 +950,6 @@ export function ZoneLookupForm() {
             </button>
           </div>
         )}
-
-        <form onSubmit={onTestLocation} className="mt-4 grid gap-3 md:grid-cols-[1fr_1fr_auto] md:items-end">
-          <label className="text-sm text-black/80">
-            Test Latitude
-            <input
-              value={testLatitude}
-              onChange={(event) => setTestLatitude(event.target.value)}
-              className="mt-1 w-full rounded-md border border-black/15 px-3 py-2 text-sm"
-              placeholder="e.g. 35.282753"
-            />
-          </label>
-          <label className="text-sm text-black/80">
-            Test Longitude
-            <input
-              value={testLongitude}
-              onChange={(event) => setTestLongitude(event.target.value)}
-              className="mt-1 w-full rounded-md border border-black/15 px-3 py-2 text-sm"
-              placeholder="e.g. -120.659616"
-            />
-          </label>
-          <button
-            type="submit"
-            disabled={liveZoneLoading}
-            className="rounded-md bg-black px-4 py-2 text-sm font-medium text-white hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-70"
-          >
-            {liveZoneLoading ? "Testing..." : "Test My Location"}
-          </button>
-        </form>
 
         {geolocationSupported === false ? (
           <div className="mt-3">
@@ -1136,12 +994,12 @@ export function ZoneLookupForm() {
               <p>
                 Accuracy:{" "}
                 {liveLocation.accuracyMeters === null
-                  ? "Manual test coordinates"
+                  ? "Unavailable"
                   : `${Math.round(liveLocation.accuracyMeters)}m`}
               </p>
             </>
           ) : (
-            <p className="mt-1 text-black/70">Waiting for location fix or manual test coordinate.</p>
+            <p className="mt-1 text-black/70">Waiting for location fix.</p>
           )}
 
           {liveZoneLoading ? <p className="mt-2 text-black/70">Resolving current zone...</p> : null}
