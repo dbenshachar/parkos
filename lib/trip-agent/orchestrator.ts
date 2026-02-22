@@ -436,6 +436,7 @@ export async function orchestrateTripAgent(input: { prompt: string; limit: numbe
 
   const warnings = dedupeWarnings([
     ...parsedIntent.warnings,
+    ...parkingRecommendation.warnings,
     ...(!parkingRecommendation.withinDowntownDistance
       ? [
           `Nearest paid parking is ${Math.round(parkingRecommendation.nearestParkingDistanceMeters)}m away; destination appears outside core downtown.`,

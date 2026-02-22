@@ -177,10 +177,12 @@ Clarification behavior:
 - Time ambiguity returns `target: "arrival_time"` and asks for explicit arrival time
 - Out-of-downtown matches return `target: "destination_refinement"` instead of silently guessing
 
-Distance behavior remains unchanged:
+Distance behavior:
 
 - Destination is accepted for `ready` responses only if nearest paid downtown zone is within `1000m`
 - Output includes each recommendation's distance in meters
+- Residential recommendations are returned only when within `500m` of the destination
+- Paid and residential recommendation limits are applied independently (`limit` per list)
 - Recommendations include both paid downtown zones and nearby residential zones
 - UI map markers remain: black (destination), red (paid), blue (residential)
 

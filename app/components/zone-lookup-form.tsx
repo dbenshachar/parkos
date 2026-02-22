@@ -1007,11 +1007,9 @@ export function ZoneLookupForm() {
                 </p>
               ))}
             </div>
-            {destinationResult.residentialRecommendations.length > 0 ? (
-              <p className="mt-2 text-xs text-black/70">
-                Closest spots are ranked across paid and residential zones within 1000m.
-              </p>
-            ) : null}
+            <p className="mt-2 text-xs text-black/70">
+              Residential spots are shown only when they are within 500m of the destination.
+            </p>
             <button
               type="button"
               onClick={() => setIsMapOpen(true)}

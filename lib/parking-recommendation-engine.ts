@@ -3,33 +3,11 @@ import { recommendResidentialZonesByCoordinate } from "@/lib/parking-zones";
 import { recommendPayByPhoneZonesByCoordinate } from "@/lib/paybyphone-zones";
 
 export const MAX_DESTINATION_DISTANCE_METERS = 1000;
+export const MAX_RESIDENTIAL_RECOMMENDATION_DISTANCE_METERS = 500;
+export const NO_NEARBY_RESIDENTIAL_WARNING =
+  `No residential zones found within ${MAX_RESIDENTIAL_RECOMMENDATION_DISTANCE_METERS}m of the destination.`;
 
 const DEFAULT_RECOMMENDATION_LIMIT = 5;
-
-type CombinedCandidate =
-  | {
-      type: "paid";
-      zoneNumber: string;
-      price: string;
-      street: string;
-      intendedDestination: string;
-      distanceMeters: number;
-      zoneLat: number;
-      zoneLng: number;
-    }
-  | {
-      type: "residential";
-      zoneNumber: string;
-      price: string;
-      street: string;
-      intendedDestination: string;
-      distanceMeters: number;
-      zoneLat: number;
-      zoneLng: number;
-      district: string;
-      hours: string;
-      description: string;
-    };
 
 export type PaidParkingRecommendation = {
   zoneNumber: string;
@@ -107,7 +85,7 @@ export function recommendParkingForResolvedDestination(input: {
     resolvedDestination.latitude,
     resolvedDestination.longitude,
     {
-      limit: 5,
+      limit,
       paidOnly: true,
     },
   );
@@ -135,67 +113,38 @@ export function recommendParkingForResolvedDestination(input: {
     resolvedDestination.latitude,
     resolvedDestination.longitude,
     {
-      limit: 5,
-      maxDistanceMeters: maxDowntownDistanceMeters,
+      limit,
+      maxDistanceMeters: MAX_RESIDENTIAL_RECOMMENDATION_DISTANCE_METERS,
     },
   );
 
-  const combined: CombinedCandidate[] = [
-    ...paidCandidates.map((item) => ({
-      type: "paid" as const,
-      zoneNumber: item.zoneNumber,
-      price: item.price,
-      street: resolvedDestination.street,
-      intendedDestination: resolvedDestination.destination,
-      distanceMeters: item.distanceMeters,
-      zoneLat: item.zoneLat,
-      zoneLng: item.zoneLng,
-    })),
-    ...residentialCandidates.map((item) => ({
-      type: "residential" as const,
-      zoneNumber: item.zoneId,
-      price: "Permit required",
-      street: resolvedDestination.street,
-      intendedDestination: resolvedDestination.destination,
-      distanceMeters: item.distanceMeters,
-      zoneLat: item.zoneLat,
-      zoneLng: item.zoneLng,
-      district: item.district,
-      hours: item.hours,
-      description: item.description,
-    })),
-  ]
-    .sort((a, b) => a.distanceMeters - b.distanceMeters)
-    .slice(0, limit);
+  const recommendations = paidCandidates.slice(0, limit).map((item) => ({
+    zoneNumber: item.zoneNumber,
+    price: item.price,
+    street: resolvedDestination.street,
+    intendedDestination: resolvedDestination.destination,
+    distanceMeters: item.distanceMeters,
+    zoneLat: item.zoneLat,
+    zoneLng: item.zoneLng,
+  }));
 
-  const recommendations = combined
-    .filter((candidate): candidate is Extract<CombinedCandidate, { type: "paid" }> => candidate.type === "paid")
-    .map((candidate) => ({
-      zoneNumber: candidate.zoneNumber,
-      price: candidate.price,
-      street: candidate.street,
-      intendedDestination: candidate.intendedDestination,
-      distanceMeters: candidate.distanceMeters,
-      zoneLat: candidate.zoneLat,
-      zoneLng: candidate.zoneLng,
-    }));
+  const residentialRecommendations = residentialCandidates.slice(0, limit).map((item) => ({
+    zoneNumber: item.zoneId,
+    price: "Permit required",
+    street: resolvedDestination.street,
+    intendedDestination: resolvedDestination.destination,
+    distanceMeters: item.distanceMeters,
+    zoneLat: item.zoneLat,
+    zoneLng: item.zoneLng,
+    district: item.district,
+    hours: item.hours,
+    description: item.description,
+  }));
 
-  const residentialRecommendations = combined
-    .filter(
-      (candidate): candidate is Extract<CombinedCandidate, { type: "residential" }> => candidate.type === "residential",
-    )
-    .map((candidate) => ({
-      zoneNumber: candidate.zoneNumber,
-      price: candidate.price,
-      street: candidate.street,
-      intendedDestination: candidate.intendedDestination,
-      distanceMeters: candidate.distanceMeters,
-      zoneLat: candidate.zoneLat,
-      zoneLng: candidate.zoneLng,
-      district: candidate.district,
-      hours: candidate.hours,
-      description: candidate.description,
-    }));
+  const warnings: string[] = [];
+  if (residentialRecommendations.length === 0) {
+    warnings.push(NO_NEARBY_RESIDENTIAL_WARNING);
+  }
 
   return {
     destination: resolvedDestination.destination,
@@ -205,7 +154,7 @@ export function recommendParkingForResolvedDestination(input: {
     nearestParkingDistanceMeters,
     recommendations,
     residentialRecommendations,
-    warnings: [],
+    warnings,
     hasPaidCandidates: true,
     withinDowntownDistance,
     maxDowntownDistanceMeters,
