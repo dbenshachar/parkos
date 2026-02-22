@@ -51,7 +51,7 @@ export function HomeLoginCard() {
         return;
       }
 
-      router.push("/profile");
+      router.push("/parking");
     } catch (requestError) {
       const message = requestError instanceof Error ? requestError.message : "Failed to log in.";
       setError(message);

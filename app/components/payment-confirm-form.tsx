@@ -23,6 +23,14 @@ type ExecutePaymentResponse = {
   expiresAt: string;
 };
 
+type MeResponse = {
+  ok?: boolean;
+  profile?: {
+    licensePlate?: string;
+  } | null;
+  error?: string;
+};
+
 type PaymentDetailsState = {
   cardNumber: string;
   cardCCV: string;
@@ -91,24 +99,40 @@ export function PaymentConfirmForm() {
     setLoadingRequest(false);
 
     void (async () => {
+      let stored = null as Awaited<ReturnType<typeof loadStoredPaymentProfile>>;
       try {
-        const stored = await loadStoredPaymentProfile();
-        if (stored) {
-          setHasStoredProfile(true);
-          setDetails((current) => ({
-            ...current,
-            cardNumber: stored.cardNumber,
-            cardExpiration: stored.cardExpiration,
-            zipCode: stored.zipCode,
-            license: stored.license,
-            cardCCV: "",
-          }));
-        }
+        stored = await loadStoredPaymentProfile();
+        setHasStoredProfile(Boolean(stored));
       } catch {
         setHasStoredProfile(false);
-      } finally {
-        setLoadingStoredProfile(false);
       }
+
+      let licenseFromProfile = "";
+      try {
+        const response = await fetch("/api/account/me", {
+          method: "GET",
+          cache: "no-store",
+        });
+        if (response.ok) {
+          const payload = (await response.json().catch(() => ({}))) as MeResponse;
+          licenseFromProfile = payload.profile?.licensePlate?.trim() || "";
+        }
+      } catch {
+        licenseFromProfile = "";
+      }
+
+      if (stored || licenseFromProfile) {
+        setDetails((current) => ({
+          ...current,
+          cardNumber: stored?.cardNumber || current.cardNumber,
+          cardExpiration: stored?.cardExpiration || current.cardExpiration,
+          zipCode: stored?.zipCode || current.zipCode,
+          license: stored?.license || current.license || licenseFromProfile,
+          cardCCV: "",
+        }));
+      }
+
+      setLoadingStoredProfile(false);
     })();
   }, []);
 
