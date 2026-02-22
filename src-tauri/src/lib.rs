@@ -58,6 +58,7 @@ fn save_payment_profile(app: tauri::AppHandle, profile: PaymentProfile) -> Resul
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
+    .plugin(tauri_plugin_notification::init())
     .invoke_handler(tauri::generate_handler![load_payment_profile, save_payment_profile])
     .setup(|app| {
       if cfg!(debug_assertions) {

@@ -3,6 +3,12 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
+import {
+  Schedule,
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
 
 import { loadStoredPaymentProfile, saveStoredPaymentProfile } from "@/lib/payment-profile-storage";
 
@@ -84,6 +90,48 @@ function formatTimestamp(iso: string): string {
     hour: "numeric",
     minute: "2-digit",
   }).format(date);
+}
+
+function isIPhoneTauriRuntime(): boolean {
+  if (typeof window === "undefined" || typeof navigator === "undefined") {
+    return false;
+  }
+
+  const userAgent = navigator.userAgent || "";
+  const isIPhone = /\biPhone\b/i.test(userAgent);
+  const hasTauri = "__TAURI_INTERNALS__" in window;
+  return isIPhone && hasTauri;
+}
+
+function tickLabelTitle(label: ScheduledTick["label"]): string {
+  if (label === "payment_confirmed") {
+    return "Payment Confirmed";
+  }
+  if (label === "post_payment_info") {
+    return "Parking Info";
+  }
+  if (label === "renew_reminder") {
+    return "Renew Reminder";
+  }
+  return "Parking Expired";
+}
+
+function tickLabelBody(args: {
+  label: ScheduledTick["label"];
+  zoneNumber: string;
+  expiresAt: string;
+}): string {
+  const expiresLabel = formatTimestamp(args.expiresAt);
+  if (args.label === "payment_confirmed") {
+    return `Zone ${args.zoneNumber} is active. Expires ${expiresLabel}.`;
+  }
+  if (args.label === "post_payment_info") {
+    return `Check local parking signs for zone ${args.zoneNumber} details.`;
+  }
+  if (args.label === "renew_reminder") {
+    return `Zone ${args.zoneNumber} expires at ${expiresLabel}. Renew soon if needed.`;
+  }
+  return `Zone ${args.zoneNumber} has expired. Move or renew to avoid citations.`;
 }
 
 export function PaymentConfirmForm() {
@@ -198,6 +246,58 @@ export function PaymentConfirmForm() {
     }
   };
 
+  const scheduleIPhoneBackgroundPush = async (args: {
+    sessionId: string;
+    zoneNumber: string;
+    durationMinutes: number;
+    expiresAt: string;
+  }) => {
+    try {
+      if (!isIPhoneTauriRuntime()) {
+        return;
+      }
+
+      const permissionGranted = await isPermissionGranted();
+      const state = permissionGranted ? "granted" : await requestPermission();
+      if (state !== "granted") {
+        return;
+      }
+
+      const schedule = computeScheduledTicks(args.durationMinutes, args.expiresAt);
+      const nowMs = Date.now();
+
+      for (let index = 0; index < schedule.length; index += 1) {
+        const item = schedule[index];
+        const fireAt = new Date(nowMs + item.delayMs);
+        const title = `ParkOS: ${tickLabelTitle(item.label)}`;
+        const body = tickLabelBody({
+          label: item.label,
+          zoneNumber: args.zoneNumber,
+          expiresAt: args.expiresAt,
+        });
+
+        // Keep notification IDs deterministic per session + stage to avoid duplicate stacks.
+        const idBase = Math.abs(
+          [...`${args.sessionId}:${item.label}`].reduce((acc, char) => (acc * 31 + char.charCodeAt(0)) | 0, 7),
+        );
+        sendNotification({
+          id: idBase + index,
+          title,
+          body,
+          group: `parkos-session-${args.sessionId}`,
+          schedule: Schedule.at(fireAt, false, true),
+          extra: {
+            sessionId: args.sessionId,
+            zoneNumber: args.zoneNumber,
+            type: item.label,
+          },
+        });
+      }
+    } catch {
+      // Push scheduling is best effort and should not block payment success.
+    }
+  };
+
   useEffect(() => {
     return () => {
       for (const timerId of tickTimerIdsRef.current) {
@@ -274,6 +374,12 @@ export function PaymentConfirmForm() {
 
       const payload = (await response.json()) as ExecutePaymentResponse;
       scheduleNotificationTicks(request.durationMinutes, payload.expiresAt);
+      void scheduleIPhoneBackgroundPush({
+        sessionId: request.sessionId,
+        zoneNumber: request.zoneNumber,
+        durationMinutes: request.durationMinutes,
+        expiresAt: payload.expiresAt,
+      });
       setSuccessMessage(`Payment ${payload.paymentStatus}. Expires at ${formatTimestamp(payload.expiresAt)}.`);
       setDetails((current) => ({
         ...current,
@@ -392,7 +498,9 @@ export function PaymentConfirmForm() {
 
       {errorMessage ? <p className="text-sm text-red-700">{errorMessage}</p> : null}
       {successMessage ? <p className="text-sm text-emerald-700">{successMessage}</p> : null}
-      <p className="text-xs text-black/60">Card number, expiration, ZIP code, and plate are saved locally on-device. CCV is never saved.</p>
+      <p className="text-xs text-black/60">
+        Card number, expiration, ZIP code, and plate are saved locally on-device. CCV is never saved.
+      </p>
     </div>
   );
 }
