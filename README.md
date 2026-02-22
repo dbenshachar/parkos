@@ -179,7 +179,45 @@ Behavior:
   - `Start Live Location` for continuous tracking
   - `I have parked!` to capture a parked snapshot for payment entry
 
-Note: `Proceed to Payment` is currently an entry-point placeholder and does not yet launch an external payment app.
+## Parking Agent (LLM + SMS reminders)
+
+The app now supports an LLM-driven parking agent with deterministic scheduling:
+
+- Captures parked sessions from `I have parked!`
+- Generates concise in-app parking rules + citations
+- Executes payment session state and schedules 4 SMS stages
+- Supports SMS deep-link resume/renew from saved parked coordinates
+
+New APIs:
+
+- `POST /api/parking/session/capture`
+- `POST /api/parking/payment/execute`
+- `GET /api/parking/session/resume?token=...`
+- `POST /api/jobs/parking-agent-tick` (cron)
+- `POST /api/sms/twilio/webhook` (STOP/START handling)
+
+## Required environment variables
+
+Use `.env.example` as the source of truth. Core variables:
+
+- OpenAI: `OPENAI_API_KEY`, optional `OPENAI_PARKING_AGENT_MODEL`
+- Supabase: `SUPABASE_URL`, `SUPABASE_API_KEY`
+- App links/scheduling: `APP_BASE_URL`, `CRON_SECRET`
+- Twilio: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and either `TWILIO_MESSAGING_SERVICE_SID` or `TWILIO_FROM_NUMBER`
+- Optional live-rule sources: `PARKING_RULE_SOURCE_URLS` (comma-separated)
+
+## Cron setup
+
+Schedule `POST /api/jobs/parking-agent-tick` every minute with:
+
+- Header: `Authorization: Bearer <CRON_SECRET>`
+- Behavior: sends due SMS notifications (`payment_confirmed`, `post_payment_info`, `renew_reminder`, `parking_expired`)
+
+## Database migration
+
+Run the new migration before using parking-agent APIs:
+
+- `supabase/20260222_add_parking_agent_tables.sql`
 
 ## Learn More
 

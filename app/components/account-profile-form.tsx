@@ -8,6 +8,8 @@ type FormValues = {
   email: string;
   password: string;
   confirmPassword: string;
+  phoneE164: string;
+  smsOptIn: boolean;
   carMake: string;
   carModel: string;
   carColor: string;
@@ -20,12 +22,16 @@ const initialValues: FormValues = {
   email: "",
   password: "",
   confirmPassword: "",
+  phoneE164: "",
+  smsOptIn: false,
   carMake: "",
   carModel: "",
   carColor: "",
   licensePlate: "",
   licensePlateState: "",
 };
+
+const E164_PHONE_REGEX = /^\+[1-9][0-9]{7,14}$/;
 
 function normalizePlate(value: string): string {
   return value.toUpperCase().replace(/\s+/g, "");
@@ -57,7 +63,7 @@ export function AccountProfileForm() {
   }, [usernameFromQuery]);
 
   const onChange =
-    <K extends keyof FormValues>(field: K) =>
+    <K extends Exclude<keyof FormValues, "smsOptIn">>(field: K) =>
     (event: React.ChangeEvent<HTMLInputElement>) => {
       setValues((previous) => ({
         ...previous,
@@ -91,6 +97,12 @@ export function AccountProfileForm() {
     if (!values.licensePlate.trim()) {
       nextErrors.push("License plate is required.");
     }
+    if (values.phoneE164.trim() && !E164_PHONE_REGEX.test(values.phoneE164.trim())) {
+      nextErrors.push("Phone must be in E.164 format (e.g. +15551234567).");
+    }
+    if (values.smsOptIn && !values.phoneE164.trim()) {
+      nextErrors.push("Phone number is required when SMS reminders are enabled.");
+    }
 
     return nextErrors;
   };
@@ -117,6 +129,8 @@ export function AccountProfileForm() {
             username: values.username.trim().toLowerCase(),
             email: values.email.trim().toLowerCase(),
             password: values.password,
+            phoneE164: values.phoneE164.trim() || null,
+            smsOptIn: values.smsOptIn,
             carMake: values.carMake.trim(),
             carModel: values.carModel.trim(),
             carColor: values.carColor.trim() || null,
@@ -199,6 +213,38 @@ export function AccountProfileForm() {
                   className="mt-1 w-full rounded-md border border-black/15 px-3 py-2 text-sm"
                   placeholder="Re-enter password"
                 />
+              </label>
+            </div>
+          </section>
+
+          <section className="rounded-xl border border-black/10 bg-black/[0.02] p-4">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-black/70">SMS Alerts</h3>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <label className="text-sm text-black/80">
+                Phone (E.164)
+                <input
+                  name="phone_e164"
+                  type="tel"
+                  value={values.phoneE164}
+                  onChange={onChange("phoneE164")}
+                  className="mt-1 w-full rounded-md border border-black/15 px-3 py-2 text-sm"
+                  placeholder="+15551234567"
+                />
+              </label>
+              <label className="flex items-center gap-2 text-sm text-black/80 md:mt-7">
+                <input
+                  name="sms_opt_in"
+                  type="checkbox"
+                  checked={values.smsOptIn}
+                  onChange={(event) => {
+                    setValues((previous) => ({
+                      ...previous,
+                      smsOptIn: event.target.checked,
+                    }));
+                  }}
+                  className="h-4 w-4 rounded border border-black/30"
+                />
+                Enable SMS reminders for renew/expiry
               </label>
             </div>
           </section>

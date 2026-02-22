@@ -22,6 +22,9 @@ export type UserPaymentProfileRow = {
   car_color?: string | null;
   license_plate?: string;
   license_plate_state?: string | null;
+  phone_e164?: string | null;
+  sms_opt_in?: boolean;
+  sms_opt_in_at?: string | null;
 };
 
 export type UserPaymentProfileForClient = {
@@ -33,6 +36,9 @@ export type UserPaymentProfileForClient = {
   carColor: string;
   licensePlate: string;
   licensePlateState: string;
+  phoneE164: string;
+  smsOptIn: boolean;
+  smsOptInAt: string | null;
 };
 
 type DbResult<T> = { ok: true; value: T } | { ok: false; status: number; error: string };
@@ -46,6 +52,9 @@ type ProfileCreateInput = {
   carColor: string | null;
   licensePlate: string;
   licensePlateState: string | null;
+  phoneE164: string | null;
+  smsOptIn: boolean;
+  smsOptInAt: string | null;
 };
 
 type ProfileUpdateInput = {
@@ -56,10 +65,13 @@ type ProfileUpdateInput = {
   carColor?: string | null;
   licensePlate?: string;
   licensePlateState?: string | null;
+  phoneE164?: string | null;
+  smsOptIn?: boolean;
+  smsOptInAt?: string | null;
 };
 
 const PROFILE_SELECT =
-  "id,username,password_hash,email,car_make,car_model,car_color,license_plate,license_plate_state";
+  "id,username,password_hash,email,car_make,car_model,car_color,license_plate,license_plate_state,phone_e164,sms_opt_in,sms_opt_in_at";
 const PASSWORD_HASH_VERSION = "scrypt_v1";
 
 export function getSupabaseConfig(): SupabaseConfig | null {
@@ -91,6 +103,14 @@ export function normalizeEmail(value: string): string {
 
 export function normalizePlate(value: string): string {
   return value.toUpperCase().replace(/\s+/g, "");
+}
+
+export function normalizePhoneE164(value: string | null | undefined): string | null {
+  const normalized = (value || "").trim();
+  if (!normalized) {
+    return null;
+  }
+  return normalized;
 }
 
 export function hashPassword(password: string): string {
@@ -131,6 +151,9 @@ export function mapProfileForClient(profile: UserPaymentProfileRow | null): User
     carColor: profile.car_color || "",
     licensePlate: profile.license_plate,
     licensePlateState: profile.license_plate_state || "",
+    phoneE164: profile.phone_e164 || "",
+    smsOptIn: Boolean(profile.sms_opt_in),
+    smsOptInAt: profile.sms_opt_in_at || null,
   };
 }
 
@@ -234,6 +257,9 @@ export async function insertProfile(
       car_color: input.carColor,
       license_plate: input.licensePlate,
       license_plate_state: input.licensePlateState,
+      phone_e164: input.phoneE164,
+      sms_opt_in: input.smsOptIn,
+      sms_opt_in_at: input.smsOptInAt,
     }),
   });
 
@@ -262,7 +288,7 @@ export async function updateProfile(
   profileId: string,
   input: ProfileUpdateInput,
 ): Promise<DbResult<UserPaymentProfileRow>> {
-  const updatePayload: Record<string, string | null> = {};
+  const updatePayload: Record<string, unknown> = {};
   if (input.email !== undefined) {
     updatePayload.email = input.email;
   }
@@ -283,6 +309,15 @@ export async function updateProfile(
   }
   if (input.licensePlateState !== undefined) {
     updatePayload.license_plate_state = input.licensePlateState;
+  }
+  if (input.phoneE164 !== undefined) {
+    updatePayload.phone_e164 = input.phoneE164;
+  }
+  if (input.smsOptIn !== undefined) {
+    updatePayload.sms_opt_in = input.smsOptIn;
+  }
+  if (input.smsOptInAt !== undefined) {
+    updatePayload.sms_opt_in_at = input.smsOptInAt;
   }
 
   const url = new URL(`${config.url}/rest/v1/user_payment_profiles`);

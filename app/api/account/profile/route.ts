@@ -6,6 +6,7 @@ import {
   hashPassword,
   insertProfile,
   normalizeEmail,
+  normalizePhoneE164,
   normalizePlate,
   normalizeUsername,
   parseOptionalText,
@@ -23,7 +24,11 @@ type SaveProfileRequest = {
   carColor?: string | null;
   licensePlate?: string;
   licensePlateState?: string | null;
+  phoneE164?: string | null;
+  smsOptIn?: boolean;
 };
+
+const E164_PHONE_REGEX = /^\+[1-9][0-9]{7,14}$/;
 
 function isUniqueConstraintError(error: string): boolean {
   const normalized = error.toLowerCase();
@@ -50,6 +55,9 @@ export async function POST(request: NextRequest) {
   const licensePlate = normalizePlate(parseRequiredText(body.licensePlate));
   const carColor = parseOptionalText(body.carColor);
   const licensePlateState = parseOptionalText(body.licensePlateState)?.toUpperCase() || null;
+  const phoneE164 = normalizePhoneE164(body.phoneE164);
+  const smsOptIn = body.smsOptIn === true;
+  const smsOptInAt = smsOptIn ? new Date().toISOString() : null;
 
   if (!username || !password || !email || !carMake || !carModel || !licensePlate) {
     return NextResponse.json(
@@ -62,6 +70,12 @@ export async function POST(request: NextRequest) {
   }
   if (password.length < 8) {
     return NextResponse.json({ error: "Password must be at least 8 characters." }, { status: 400 });
+  }
+  if (phoneE164 && !E164_PHONE_REGEX.test(phoneE164)) {
+    return NextResponse.json({ error: "Phone number must be in E.164 format (e.g. +15551234567)." }, { status: 400 });
+  }
+  if (smsOptIn && !phoneE164) {
+    return NextResponse.json({ error: "A phone number is required when SMS reminders are enabled." }, { status: 400 });
   }
 
   const config = getSupabaseConfig();
@@ -98,6 +112,9 @@ export async function POST(request: NextRequest) {
       carColor,
       licensePlate,
       licensePlateState,
+      phoneE164,
+      smsOptIn,
+      smsOptInAt,
     });
     if (!updatedProfile.ok) {
       return NextResponse.json({ error: updatedProfile.error }, { status: 502 });
@@ -131,6 +148,9 @@ export async function POST(request: NextRequest) {
     carColor,
     licensePlate,
     licensePlateState,
+    phoneE164,
+    smsOptIn,
+    smsOptInAt,
   });
 
   if (!createdProfile.ok) {

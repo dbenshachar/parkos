@@ -7,6 +7,8 @@ type SavedProfile = {
   id?: string;
   username?: string;
   email?: string;
+  phoneE164?: string;
+  smsOptIn?: boolean;
   carMake?: string;
   carModel?: string;
   carColor?: string;
@@ -24,6 +26,8 @@ type MeResponse = {
 type EditableValues = {
   username: string;
   email: string;
+  phoneE164: string;
+  smsOptIn: boolean;
   carMake: string;
   carModel: string;
   carColor: string;
@@ -34,12 +38,16 @@ type EditableValues = {
 const defaultValues: EditableValues = {
   username: "",
   email: "",
+  phoneE164: "",
+  smsOptIn: false,
   carMake: "",
   carModel: "",
   carColor: "",
   licensePlate: "",
   licensePlateState: "",
 };
+
+const E164_PHONE_REGEX = /^\+[1-9][0-9]{7,14}$/;
 
 function normalizePlate(value: string): string {
   return value.toUpperCase().replace(/\s+/g, "");
@@ -77,6 +85,8 @@ export function ProfileEditorCard() {
         setValues({
           username: loadedProfile?.username || payload.username || "",
           email: loadedProfile?.email || "",
+          phoneE164: loadedProfile?.phoneE164 || "",
+          smsOptIn: Boolean(loadedProfile?.smsOptIn),
           carMake: loadedProfile?.carMake || "",
           carModel: loadedProfile?.carModel || "",
           carColor: loadedProfile?.carColor || "",
@@ -102,7 +112,7 @@ export function ProfileEditorCard() {
   }, []);
 
   const onChange =
-    <K extends keyof EditableValues>(field: K) =>
+    <K extends Exclude<keyof EditableValues, "smsOptIn">>(field: K) =>
     (event: React.ChangeEvent<HTMLInputElement>) => {
       setValues((previous) => ({
         ...previous,
@@ -123,6 +133,14 @@ export function ProfileEditorCard() {
       setSaveError("Email, car make, car model, and license plate are required.");
       return;
     }
+    if (values.phoneE164.trim() && !E164_PHONE_REGEX.test(values.phoneE164.trim())) {
+      setSaveError("Phone must be in E.164 format (e.g. +15551234567).");
+      return;
+    }
+    if (values.smsOptIn && !values.phoneE164.trim()) {
+      setSaveError("Phone number is required when SMS reminders are enabled.");
+      return;
+    }
 
     setIsSaving(true);
     void (async () => {
@@ -134,6 +152,8 @@ export function ProfileEditorCard() {
           },
           body: JSON.stringify({
             email,
+            phoneE164: values.phoneE164.trim() || null,
+            smsOptIn: values.smsOptIn,
             carMake,
             carModel,
             carColor: values.carColor.trim() || null,
@@ -152,6 +172,8 @@ export function ProfileEditorCard() {
           ...previous,
           username: savedProfile?.username || previous.username,
           email: savedProfile?.email || "",
+          phoneE164: savedProfile?.phoneE164 || "",
+          smsOptIn: Boolean(savedProfile?.smsOptIn),
           carMake: savedProfile?.carMake || "",
           carModel: savedProfile?.carModel || "",
           carColor: savedProfile?.carColor || "",
@@ -241,6 +263,30 @@ export function ProfileEditorCard() {
                 className="mt-1 w-full rounded-md border border-black/15 px-3 py-2 text-sm"
                 placeholder="name@example.com"
               />
+            </label>
+            <label className="text-sm text-black/80">
+              Phone (E.164)
+              <input
+                type="tel"
+                value={values.phoneE164}
+                onChange={onChange("phoneE164")}
+                className="mt-1 w-full rounded-md border border-black/15 px-3 py-2 text-sm"
+                placeholder="+15551234567"
+              />
+            </label>
+            <label className="flex items-center gap-2 text-sm text-black/80 md:mt-7">
+              <input
+                type="checkbox"
+                checked={values.smsOptIn}
+                onChange={(event) => {
+                  setValues((previous) => ({
+                    ...previous,
+                    smsOptIn: event.target.checked,
+                  }));
+                }}
+                className="h-4 w-4 rounded border border-black/30"
+              />
+              Enable SMS reminders for renew/expiry
             </label>
           </div>
         </section>

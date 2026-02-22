@@ -6,6 +6,7 @@ import {
   hashPassword,
   mapProfileForClient,
   normalizeEmail,
+  normalizePhoneE164,
   normalizePlate,
   parseOptionalText,
   parseRequiredText,
@@ -20,7 +21,11 @@ type UpdateProfileRequest = {
   carColor?: string | null;
   licensePlate?: string;
   licensePlateState?: string | null;
+  phoneE164?: string | null;
+  smsOptIn?: boolean;
 };
+
+const E164_PHONE_REGEX = /^\+[1-9][0-9]{7,14}$/;
 
 function unauthorizedResponse(message: string): NextResponse {
   const response = NextResponse.json({ error: message }, { status: 401 });
@@ -117,6 +122,12 @@ export async function PATCH(request: NextRequest) {
     body.licensePlateState !== undefined
       ? parseOptionalText(body.licensePlateState)?.toUpperCase() || null
       : parseOptionalText(existingProfile.license_plate_state)?.toUpperCase() || null;
+  const phoneE164 =
+    body.phoneE164 !== undefined ? normalizePhoneE164(body.phoneE164) : normalizePhoneE164(existingProfile.phone_e164);
+  const smsOptIn = body.smsOptIn !== undefined ? body.smsOptIn === true : Boolean(existingProfile.sms_opt_in);
+  const smsOptInAt = smsOptIn
+    ? existingProfile.sms_opt_in_at || new Date().toISOString()
+    : null;
 
   if (!email || !carMake || !carModel || !licensePlate) {
     return NextResponse.json(
@@ -131,6 +142,12 @@ export async function PATCH(request: NextRequest) {
   if (nextPassword && nextPassword.length < 8) {
     return NextResponse.json({ error: "Password must be at least 8 characters." }, { status: 400 });
   }
+  if (phoneE164 && !E164_PHONE_REGEX.test(phoneE164)) {
+    return NextResponse.json({ error: "Phone number must be in E.164 format (e.g. +15551234567)." }, { status: 400 });
+  }
+  if (smsOptIn && !phoneE164) {
+    return NextResponse.json({ error: "A phone number is required when SMS reminders are enabled." }, { status: 400 });
+  }
 
   const saveResult = await updateProfile(config, existingProfile.id, {
     email,
@@ -140,6 +157,9 @@ export async function PATCH(request: NextRequest) {
     carColor,
     licensePlate,
     licensePlateState,
+    phoneE164,
+    smsOptIn,
+    smsOptInAt,
   });
 
   if (!saveResult.ok) {
