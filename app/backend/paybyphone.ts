@@ -260,4 +260,15 @@ export const processPayByPhonePayment = async (page: Page, info: UserInfo) => {
     force: true,
   });
   await page.waitForTimeout(waitTime * 5);
+
+  await page.locator("canvas").click({
+    position: { x: 638, y: 633 },
+    force: true,
+  });
+  await page.waitForTimeout(waitTime);
+
+  await page.locator("canvas").click({
+    position: { x: 636, y: 659 },
+    force: true,
+  });
 };
